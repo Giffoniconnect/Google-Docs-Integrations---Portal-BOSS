@@ -1,0 +1,6 @@
+{
+  "name": "Google Docs Integrations",
+  "description": "Central de gerenciamento de documentos automatizados, templates e integrações de documentos.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
