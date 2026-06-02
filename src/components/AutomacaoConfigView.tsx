@@ -52,6 +52,26 @@ interface AutomacaoConfigViewProps {
 export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToCentral }: AutomacaoConfigViewProps) {
   // States of configuration
   const [templateId, setTemplateId] = useState<string>('1fT22Z7M9K6hX8yPsN3w_MOCK_GDOCS_ID_' + card.id.toUpperCase());
+
+  // API Google Docs State
+  const [googleDocsStatus, setGoogleDocsStatus] = useState<'não_configurado' | 'conectado' | 'template_inacessivel' | 'erro_docs'>('conectado');
+
+  // API Google Drive State
+  const [googleDriveStatus, setGoogleDriveStatus] = useState<'não_configurado' | 'conectado' | 'sem_permissao' | 'erro_drive'>('conectado');
+
+  // Manual interactive action logs
+  const [userActionLogs, setUserActionLogs] = useState<Array<GdiLogEntry>>([]);
+
+  const addActionLog = (step: string, status: 'success' | 'failed', message: string, details?: string) => {
+    const newLog: GdiLogEntry = {
+      timestamp: getFormattedNow(),
+      step,
+      status,
+      message,
+      details
+    };
+    setUserActionLogs(prev => [newLog, ...prev]);
+  };
   const [templateStatus, setTemplateStatus] = useState<'não_configurado' | 'configurado' | 'validado' | 'erro_template'>('validated');
   const [templateError, setTemplateError] = useState<string>('');
   
@@ -305,7 +325,7 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
       fileName: `DRAFT_EXEC_${card.documentType.toUpperCase()}_CASE_2026_98745.pdf`,
       destinationFolderId: '1H9D48xPlOsM2z7_GD_FOLDER_ID_MOCK',
       generatedAt: '2026-06-02T17:52:19Z',
-      logs: performanceLogs.map(l => ({
+      logs: [...userActionLogs, ...performanceLogs].map(l => ({
         timestamp: l.timestamp,
         step: l.step,
         status: l.status,
@@ -325,6 +345,12 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
       errorMessage: errorMsg,
       failedAt: '2026-06-02T17:52:14Z',
       logs: [
+        ...userActionLogs.map(l => ({
+          timestamp: l.timestamp,
+          step: l.step,
+          status: l.status,
+          message: l.message
+        })),
         { timestamp: '02/06/2026 17:52:12', step: 'GDI_JOB_RECEIVED', status: 'success', message: 'Job recebido no endpoint de recepção estática' },
         { timestamp: '02/06/2026 17:52:13', step: 'GDI_PAYLOAD_VALIDATED', status: 'failed', message: 'Falha durante o processamento', details: errorMsg }
       ]
@@ -1015,6 +1041,305 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
             </div>
           </div>
 
+          {/* API GOOGLE DOCS CARD */}
+          <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs">
+            <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-3">
+              <div className="flex items-center space-x-2.5">
+                <div className="h-8 w-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                  <FileCode className="h-4.5 w-4.5" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">API Google Docs</h3>
+                  <p className="text-[10px] text-slate-400">Gerência de cópias de modelos, mesclagem e preenchimento de placeholders</p>
+                </div>
+              </div>
+
+              {/* Status Badge */}
+              {googleDocsStatus === 'conectado' && (
+                <span className="bg-emerald-50 text-emerald-700 border border-emerald-250 font-bold text-[9px] uppercase font-mono px-2 py-0.5 rounded flex items-center gap-1">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+                  Conectado
+                </span>
+              )}
+              {googleDocsStatus === 'não_configurado' && (
+                <span className="bg-slate-100 text-slate-650 border border-slate-200 font-bold text-[9px] uppercase font-mono px-2 py-0.5 rounded flex items-center gap-1">
+                  <span className="h-1.5 w-1.5 rounded-full bg-slate-400"></span>
+                  Não Configurado
+                </span>
+              )}
+              {googleDocsStatus === 'template_inacessivel' && (
+                <span className="bg-amber-50 text-amber-705 border border-amber-250 font-bold text-[9px] uppercase font-mono px-2 py-0.5 rounded flex items-center gap-1">
+                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+                  Template Inacessível
+                </span>
+              )}
+              {googleDocsStatus === 'erro_docs' && (
+                <span className="bg-rose-50 text-rose-705 border border-rose-250 font-bold text-[9px] uppercase font-mono px-2 py-0.5 rounded flex items-center gap-1">
+                  <span className="h-1.5 w-1.5 rounded-full bg-rose-500 animate-pulse"></span>
+                  Erro Docs API
+                </span>
+              )}
+            </div>
+
+            <div className="space-y-4">
+              <p className="text-xs text-slate-500 leading-normal">
+                Permite ao GDI copiar os modelos mestre obtidos no Google Docs, ler suas estruturas de parágrafos, mesclar as chaves duplas com os metadados validados do Portal BOSS e compilar o documento ativo.
+              </p>
+
+              {/* Action Buttons Matrix */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setGoogleDocsStatus('conectado');
+                    addActionLog('GDI_DOCS_API_CHECK_STARTED', 'success', 'Docs API: Iniciando leitura do cabeçalho do template...');
+                    addActionLog('GDI_DOCS_TEMPLATE_READ_SUCCESS', 'success', 'Docs API: Metadados estruturais do template original processados.');
+                    alert('Sincronização Docs API: Leitura do template concluída com sucesso!');
+                  }}
+                  className="px-3 py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 hover:text-blue-600 font-medium border border-slate-250 rounded-lg shadow-2xs transition flex items-center justify-center gap-1.5 text-center cursor-pointer text-xs"
+                >
+                  <RefreshCw className="h-3 w-3 text-slate-400" />
+                  <span>Testar leitura do template</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (googleDocsStatus === 'erro_docs' || googleDocsStatus === 'template_inacessivel') {
+                      addActionLog('GDI_DOCS_API_FAILED', 'failed', 'Erro crítico: Docs API inacessível para operação de clone.');
+                      alert('Erro na API Google Docs: Abortado devido ao erro de status simulado!');
+                    } else {
+                      setGoogleDocsStatus('conectado');
+                      addActionLog('GDI_DOCS_TEMPLATE_COPY_SUCCESS', 'success', 'Docs API: Cópia estendida do template efetuada no drive corporativo.');
+                      alert('Docs API: Cópia do arquivo mestre operacional feita com êxito!');
+                    }
+                  }}
+                  className="px-3 py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 hover:text-blue-600 font-medium border border-slate-250 rounded-lg shadow-2xs transition flex items-center justify-center gap-1.5 text-center cursor-pointer text-xs"
+                >
+                  <Copy className="h-3 w-3 text-slate-400" />
+                  <span>Testar cópia do template</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    addActionLog('GDI_DOCS_PLACEHOLDER_REPLACE_SUCCESS', 'success', 'Docs API: 100% de placeholders do Portal BOSS foram substituídos no arquivo destino de rascunho.');
+                    alert('Docs API: Substituição integral de placeholders validada na cópia do template!');
+                  }}
+                  className="px-3 py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 hover:text-blue-600 font-medium border border-slate-250 rounded-lg shadow-2xs transition flex items-center justify-center gap-1.5 text-center cursor-pointer text-xs"
+                >
+                  <Brackets className="h-3 w-3 text-slate-400" />
+                  <span>Testar substituição de placeholders</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    alert(`GDocs API - Verificando integridade das tags...\nTemplate ID: ${card.id === 'procuracao-pf' ? '16k_n_BTdf8wTCG8CK4T2TyAT93o5qrmZqjbROtrBqzk' : templateId}\nResultado: Estrutura sem erros de formato.`);
+                    addActionLog('GDI_DOCS_TEMPLATE_READ_SUCCESS', 'success', 'Validação geral de template e formato GDocs concluída.');
+                  }}
+                  className="px-3 py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 hover:text-blue-600 font-medium border border-slate-250 rounded-lg shadow-2xs transition flex items-center justify-center gap-1.5 text-center cursor-pointer text-xs"
+                >
+                  <CheckCircle className="h-3 w-3 text-emerald-500" />
+                  <span>Validar template Google Docs</span>
+                </button>
+              </div>
+
+              {/* API Docs simulated controller */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between border-t border-slate-100 pt-3 text-[11px] text-slate-500 gap-2">
+                <span>Versão do microsserviço: <strong className="text-slate-700 font-mono">v1.1</strong></span>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-slate-400 font-mono">Simulador de Status Docs:</span>
+                  <select
+                    value={googleDocsStatus}
+                    onChange={(e) => {
+                      const newStatus = e.target.value as any;
+                      setGoogleDocsStatus(newStatus);
+                      if (newStatus === 'erro_docs' || newStatus === 'template_inacessivel') {
+                        addActionLog('GDI_DOCS_API_FAILED', 'failed', `Status da API Google Docs alterado para: ${newStatus}`, 'Operador simulando intercorrência.');
+                      } else {
+                        addActionLog('GDI_DOCS_API_CHECK_STARTED', 'success', `Status da API Google Docs restabelecido para: ${newStatus}`);
+                      }
+                    }}
+                    className="border border-slate-200 rounded px-1.5 py-0.5 bg-white text-xs font-mono text-slate-600 focus:outline-none"
+                  >
+                    <option value="conectado">conectado</option>
+                    <option value="não_configurado">não_configurado</option>
+                    <option value="template_inacessivel">template_inacessivel</option>
+                    <option value="erro_docs">erro_docs</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* API GOOGLE DRIVE CARD */}
+          <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs">
+            <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-3">
+              <div className="flex items-center space-x-2.5">
+                <div className="h-8 w-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
+                  <FolderCheck className="h-4.5 w-4.5" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">API Google Drive</h3>
+                  <p className="text-[10px] text-slate-400">Validação e gravação nas pastas enviadas pelo Portal BOSS</p>
+                </div>
+              </div>
+
+              {/* Status Badge */}
+              {googleDriveStatus === 'conectado' && (
+                <span className="bg-emerald-50 text-emerald-700 border border-emerald-250 font-bold text-[9px] uppercase font-mono px-2 py-0.5 rounded flex items-center gap-1">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+                  Conectado
+                </span>
+              )}
+              {googleDriveStatus === 'não_configurado' && (
+                <span className="bg-slate-100 text-slate-650 border border-slate-200 font-bold text-[9px] uppercase font-mono px-2 py-0.5 rounded flex items-center gap-1">
+                  <span className="h-1.5 w-1.5 rounded-full bg-slate-400"></span>
+                  Não Configurado
+                </span>
+              )}
+              {googleDriveStatus === 'sem_permissao' && (
+                <span className="bg-amber-50 text-amber-705 border border-amber-250 font-bold text-[9px] uppercase font-mono px-2 py-0.5 rounded flex items-center gap-1">
+                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+                  Sem Permissão
+                </span>
+              )}
+              {googleDriveStatus === 'erro_drive' && (
+                <span className="bg-rose-50 text-rose-705 border border-rose-250 font-bold text-[9px] uppercase font-mono px-2 py-0.5 rounded flex items-center gap-1">
+                  <span className="h-1.5 w-1.5 rounded-full bg-rose-500 animate-pulse"></span>
+                  Erro Drive API
+                </span>
+              )}
+            </div>
+
+            <div className="space-y-4">
+              <p className="text-xs text-slate-500 leading-normal">
+                Permite ao GDI gerenciar, gravar, ler e aplicar as permissões necessárias na pasta de arquivos recebida. O GDI <strong className="font-bold underline">não armazena uma pasta destino fixa</strong>; a referência é unicamente obtida a cada webhook proveniente do Portal BOSS.
+              </p>
+
+              {/* Informative indicator of received folder path/id */}
+              <div className="bg-slate-50 border border-slate-150 p-3 rounded-lg text-xs space-y-1.5 font-mono text-[11px] text-slate-705">
+                <div className="flex justify-between">
+                  <span className="text-[10px] text-slate-400 uppercase font-bold">destinationFolderId</span>
+                  <span className="font-semibold text-slate-800 break-all select-all">{normalizedData.destinationFolderId || 'Não recebido'}</span>
+                </div>
+                <div className="flex justify-between border-t border-slate-150 pt-1.5">
+                  <span className="text-[10px] text-slate-400 uppercase font-bold">destinationFolderUrl</span>
+                  <span className="font-semibold text-blue-600 truncate max-w-[200px] hover:underline" title={normalizedData.destinationFolderUrl}>
+                    {normalizedData.destinationFolderUrl ? (
+                      <a href={normalizedData.destinationFolderUrl} target="_blank" rel="noreferrer">
+                        {normalizedData.destinationFolderUrl}
+                      </a>
+                    ) : '(vazio)'}
+                  </span>
+                </div>
+                <div className="bg-amber-100/55 border border-amber-200/60 text-amber-900/90 text-[10px] p-2 rounded leading-tight font-sans mt-2">
+                  ℹ️ <strong>Observação:</strong> Pasta de destino provém do payload do <strong>Portal BOSS</strong>. O GDI não disponibiliza formulário para registro manual dessa pasta.
+                </div>
+              </div>
+
+              {/* Action Buttons Matrix */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    addActionLog('GDI_DRIVE_API_CHECK_STARTED', 'success', 'Drive API: Inicializando canal de comunicação com API de Disco...');
+                    if (googleDriveStatus === 'erro_drive') {
+                      addActionLog('GDI_DRIVE_API_FAILED', 'failed', 'Erro crítico: API do Drive indisponível para leitura de metadados.');
+                      alert('Erro na API de leitura do Drive!');
+                    } else {
+                      addActionLog('GDI_DRIVE_FOLDER_READ_SUCCESS', 'success', 'Drive API: Metadados estruturais da pasta recebida lidos com segurança.');
+                      alert('Drive API: Teste de leitura no Drive finalizado com SUCESSO!');
+                    }
+                  }}
+                  className="px-3 py-2 bg-slate-55 hover:bg-slate-100 text-slate-700 hover:text-blue-600 font-medium border border-slate-250 rounded-lg shadow-2xs transition flex items-center justify-center gap-1.5 text-center cursor-pointer text-xs"
+                >
+                  <RefreshCw className="h-3 w-3 text-slate-400" />
+                  <span>Testar leitura no Drive</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (googleDriveStatus === 'erro_drive') {
+                      addActionLog('GDI_DRIVE_API_FAILED', 'failed', 'Drive API: Falha ao persistir objeto temporário.');
+                      alert('Erro ao tentar gravar arquivos no Drive!');
+                    } else {
+                      addActionLog('GDI_DRIVE_FOLDER_WRITE_SUCCESS', 'success', 'Drive API: Arquivo temporário gravado e excluído com êxito na pasta destino.');
+                      alert('Drive API: Gravação operando normalmente!');
+                    }
+                  }}
+                  className="px-3 py-2 bg-slate-55 hover:bg-slate-100 text-slate-700 hover:text-blue-600 font-medium border border-slate-250 rounded-lg shadow-2xs transition flex items-center justify-center gap-1.5 text-center cursor-pointer text-xs"
+                >
+                  <Copy className="h-3 w-3 text-slate-400" />
+                  <span>Testar gravação no Drive</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (googleDriveStatus === 'sem_permissao') {
+                      addActionLog('GDI_DRIVE_PERMISSION_DENIED', 'failed', 'Drive API: Erro HTTP 403. Credenciais da Conta de Serviço negadas no diretório.');
+                      alert('Permissão de acesso NEGADA para a pasta informada!');
+                    } else {
+                      addActionLog('GDI_DRIVE_API_CONNECTED', 'success', 'Drive API: Permissões de Leitura e Escrita validadas com sucesso.');
+                      alert('Permissão de acesso confirmada!');
+                    }
+                  }}
+                  className="px-3 py-2 bg-slate-55 hover:bg-slate-100 text-slate-700 hover:text-blue-600 font-medium border border-slate-250 rounded-lg shadow-2xs transition flex items-center justify-center gap-1.5 text-center cursor-pointer text-xs"
+                >
+                  <Lock className="h-3 w-3 text-slate-400" />
+                  <span>Testar permissão na pasta recebida</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!normalizedData.destinationFolderId) {
+                      addActionLog('GDI_DRIVE_API_FAILED', 'failed', 'Validação falhou: destinationFolderId está ausente no payload.');
+                      alert('Validar destinationFolderId: Inválido! Campo ausente no rascunho de dados.');
+                    } else {
+                      addActionLog('GDI_DRIVE_FOLDER_READ_SUCCESS', 'success', 'Validação OK. O destinationFolderId possui sintaxe válida de nó de arquivo.');
+                      alert(`Variável "destinationFolderId" validada: "${normalizedData.destinationFolderId}" possui sintaxe corporativa compatível.`);
+                    }
+                  }}
+                  className="px-3 py-2 bg-slate-55 hover:bg-slate-100 text-slate-750 hover:text-blue-600 font-medium border border-slate-250 rounded-lg shadow-2xs transition flex items-center justify-center gap-1.5 text-center cursor-pointer text-xs"
+                >
+                  <CheckCircle className="h-3 w-3 text-emerald-500" />
+                  <span>Validar destinationFolderId</span>
+                </button>
+              </div>
+
+              {/* API Drive simulated controller */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between border-t border-slate-100 pt-3 text-[11px] text-slate-500 gap-2">
+                <span>Espaço de armazenamento: <strong className="text-slate-700 font-mono">Ilimitado</strong></span>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-slate-400 font-mono">Simulador de Status Drive:</span>
+                  <select
+                    value={googleDriveStatus}
+                    onChange={(e) => {
+                      const newStatus = e.target.value as any;
+                      setGoogleDriveStatus(newStatus);
+                      if (newStatus === 'erro_drive' || newStatus === 'sem_permissao') {
+                        const expectedStep = newStatus === 'sem_permissao' ? 'GDI_DRIVE_PERMISSION_DENIED' : 'GDI_DRIVE_API_FAILED';
+                        addActionLog(expectedStep, 'failed', `Status da API Google Drive alterado para: ${newStatus}`, 'Operador alterou status de simulação.');
+                      } else {
+                        addActionLog('GDI_DRIVE_API_CONNECTED', 'success', `Status da API Google Drive restabelecido para: ${newStatus}`);
+                      }
+                    }}
+                    className="border border-slate-200 rounded px-1.5 py-0.5 bg-white text-xs font-mono text-slate-600 focus:outline-none"
+                  >
+                    <option value="conectado">conectado</option>
+                    <option value="não_configurado">não_configurado</option>
+                    <option value="sem_permissao">sem_permissao</option>
+                    <option value="erro_drive">erro_drive</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          </div>
+
           {/* 8. CARD — PLACEHOLDERS */}
           <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs">
             <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-3">
@@ -1669,7 +1994,7 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
               </div>
 
               <div className="space-y-3 font-mono text-[11px] leading-normal text-slate-600 max-h-[300px] overflow-y-auto pr-1">
-                {performanceLogs.map((log, index) => (
+                {[...userActionLogs, ...performanceLogs].map((log, index) => (
                   <div key={index} className="border-l-2 border-slate-200 pl-3.5 py-1 relative">
                     <span className={`absolute left-[-5px] top-2 h-2.5 w-2.5 rounded-full border border-white ${log.status === 'success' ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
                     <div className="flex items-center justify-between text-[10px] text-slate-400 mb-0.5">
@@ -1677,7 +2002,7 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
                       <span className={`font-bold uppercase tracking-wider ${log.status === 'success' ? 'text-emerald-600' : 'text-rose-600'}`}>{log.step}</span>
                     </div>
                     <p className="font-bold text-slate-800">{log.message}</p>
-                    <p className="text-[10px] text-slate-500 font-sans mt-0.5">{log.details}</p>
+                    {log.details && <p className="text-[10px] text-slate-500 font-sans mt-0.5">{log.details}</p>}
                   </div>
                 ))}
               </div>
