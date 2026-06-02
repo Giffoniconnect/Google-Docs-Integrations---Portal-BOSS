@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   ArrowLeft, 
@@ -24,6 +24,14 @@ interface DocDetailViewProps {
 
 type TabType = 'templates' | 'placeholders' | 'config-automacao';
 
+interface PortalBossVar {
+  origin: string;
+  normalized: string;
+  placeholder: string;
+  status: 'aguardando' | 'configurado';
+  category: 'Cadastro' | 'Dados do Caso' | 'Dados do Escritório';
+}
+
 export default function DocDetailView({ card, onBack }: DocDetailViewProps) {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabType>('templates');
@@ -34,28 +42,172 @@ export default function DocDetailView({ card, onBack }: DocDetailViewProps) {
     { id: 'config-automacao', label: 'Configurações da Automação', icon: Settings },
   ];
 
-  // Helper mock placeholders to make it look professional
-  const getMockPlaceholders = () => {
-    switch (card.id) {
-      case 'procuracao-pf':
-        return ['{{OUTORGANTE_NOME}}', '{{OUTORGANTE_CPF}}', '{{OUTORGANTE_ESTADO_CIVIL}}', '{{OUTORGANTE_ENDERECO}}', '{{OUTORGADO_ADVOGADO}}'];
-      case 'procuracao-pj':
-        return ['{{EMPRESA_RAZAO_SOCIAL}}', '{{EMPRESA_CNPJ}}', '{{REPRESENTANTE_NOME}}', '{{REPRESENTANTE_CPF}}', '{{OUTORGADO_ADVOGADO}}'];
-      case 'declaracao-pobreza-pf':
-        return ['{{DECLARANTE_NOME}}', '{{DECLARANTE_CPF}}', '{{DECLARANTE_RG}}', '{{DECLARANTE_PROFISSAO}}', '{{REPRESENTACAO_VARA}}'];
-      case 'declaracao-pobreza-pj':
-        return ['{{EMPRESA_RAZAO_SOCIAL}}', '{{EMPRESA_CNPJ}}', '{{REPRESENTANTE_NOME}}', '{{REPRESENTANTE_CPF}}', '{{REPRESENTACAO_VARA}}'];
-      case 'contrato-honorarios-pf':
-        return ['{{CONTRATANTE_NOME}}', '{{CONTRATANTE_CPF}}', '{{VALOR_HONORARIOS}}', '{{FORMA_PAGAMENTO}}', '{{VARA_COMPETENTE}}'];
-      case 'contrato-honorarios-pj':
-        return ['{{EMPRESA_CONTRATANTE}}', '{{EMPRESA_CNPJ}}', '{{VALOR_CONTRATE}}', '{{CONVENIO_PARCELAMENTO}}', '{{FORO_COMARCA}}'];
-      case 'primeiro-atendimento-pf':
-        return ['{{CLIENTE_NOME}}', '{{CLIENTE_TELEFONE}}', '{{RELATO_FATOS}}', '{{VALOR_CAUSA_ESTIMADO}}', '{{DATA_ATENDIMENTO}}'];
-      case 'primeiro-atendimento-pj':
-        return ['{{REPRESENTANTE_NOME}}', '{{EMPRESA_NOME_FANTASIA}}', '{{EMPRESA_CNPJ}}', '{{HISTORICO_PJ}}', '{{VALOR_CONTRATO_PJ}}'];
-      default:
-        return ['{{NOME}}', '{{DOCUMENTO_ID}}', '{{DATA_REGISTRO}}'];
+  // Helper dynamic dictionary mapping Portal BOSS variables to GDI and Google Docs Placeholders
+  const getPortalBossVariableDictionary = (cardId: string): PortalBossVar[] => {
+    const isPj = cardId.endsWith('-pj');
+    const clientVars: PortalBossVar[] = [];
+    
+    if (!isPj) {
+      // PF variables mapping
+      let prefix = '';
+      if (cardId.startsWith('procuracao')) prefix = 'OUTORGANTE_';
+      else if (cardId.startsWith('declaracao')) prefix = 'DECLARANTE_';
+      else if (cardId.startsWith('contrato')) prefix = 'CONTRATANTE_';
+      else if (cardId.startsWith('primeiro')) prefix = 'CLIENTE_';
+      else prefix = 'OUTORGANTE_';
+
+      const fields = [
+        { key: 'nomeCompleto', name: 'NOME' },
+        { key: 'nacionalidade', name: 'NACIONALIDADE' },
+        { key: 'estadoCivil', name: 'ESTADO_CIVIL' },
+        { key: 'profissao', name: 'PROFISSAO' },
+        { key: 'cpf', name: 'CPF' },
+        { key: 'rg', name: 'RG' },
+        { key: 'orgaoEmissor', name: 'ORGAO_EMISSOR' },
+        { key: 'cep', name: 'CEP' },
+        { key: 'endereco', name: 'ENDERECO' },
+        { key: 'numero', name: 'NUMERO' },
+        { key: 'complemento', name: 'COMPLEMENTO' },
+        { key: 'bairro', name: 'BAIRRO' },
+        { key: 'cidade', name: 'CIDADE' },
+        { key: 'estado', name: 'ESTADO' },
+        { key: 'email', name: 'EMAIL' },
+        { key: 'telefone', name: 'TELEFONE' },
+        { key: 'whatsapp', name: 'WHATSAPP' }
+      ];
+
+      fields.forEach(f => {
+        clientVars.push({
+          origin: `pf_${f.key}`,
+          normalized: f.key,
+          placeholder: `{{${prefix}${f.name}}}`,
+          status: 'aguardando',
+          category: 'Cadastro'
+        });
+      });
+    } else {
+      // PJ variables mapping
+      let companyPrefix = '';
+      if (cardId.startsWith('procuracao')) companyPrefix = 'EMPRESA_';
+      else if (cardId.startsWith('declaracao')) companyPrefix = 'EMPRESA_';
+      else if (cardId.startsWith('contrato')) companyPrefix = 'EMPRESA_';
+      else if (cardId.startsWith('primeiro')) companyPrefix = 'EMPRESA_';
+
+      const getCompanyPlaceholder = (key: string) => {
+        if (key === 'razaoSocial') {
+          if (cardId.startsWith('contrato')) return '{{EMPRESA_CONTRATANTE}}';
+          if (cardId.startsWith('primeiro')) return '{{EMPRESA_NOME_FANTASIA}}';
+          return `{{${companyPrefix}RAZAO_SOCIAL}}`;
+        }
+        return `{{${companyPrefix}${key.toUpperCase()}}}`;
+      };
+
+      const companyFields = [
+        { key: 'razaoSocial' },
+        { key: 'cnpj' },
+        { key: 'cep' },
+        { key: 'endereco' },
+        { key: 'numero' },
+        { key: 'complemento' },
+        { key: 'bairro' },
+        { key: 'cidade' },
+        { key: 'estado' }
+      ];
+
+      companyFields.forEach(f => {
+        clientVars.push({
+          origin: `pj_${f.key}`,
+          normalized: f.key,
+          placeholder: getCompanyPlaceholder(f.key),
+          status: 'aguardando',
+          category: 'Cadastro'
+        });
+      });
+
+      // Representante/Sócio fields
+      const socioFields = [
+        { key: 'nomeCompleto', name: 'NOME' },
+        { key: 'nacionalidade', name: 'NACIONALIDADE' },
+        { key: 'estadoCivil', name: 'ESTADO_CIVIL' },
+        { key: 'profissao', name: 'PROFISSAO' },
+        { key: 'cpf', name: 'CPF' },
+        { key: 'rg', name: 'RG' }
+      ];
+
+      socioFields.forEach(f => {
+        clientVars.push({
+          origin: `socio_${f.key}`,
+          normalized: `socio${f.key.charAt(0).toUpperCase() + f.key.slice(1)}`,
+          placeholder: `{{REPRESENTANTE_${f.name}}}`,
+          status: 'aguardando',
+          category: 'Cadastro'
+        });
+      });
     }
+
+    const caseVars: PortalBossVar[] = [
+      {
+        origin: 'caseId',
+        normalized: 'caseId',
+        placeholder: '{{CASE_ID}}',
+        status: 'aguardando',
+        category: 'Dados do Caso'
+      },
+      {
+        origin: 'clientId',
+        normalized: 'clientId',
+        placeholder: '{{CLIENT_ID}}',
+        status: 'aguardando',
+        category: 'Dados do Caso'
+      },
+      {
+        origin: 'destinationFolderId',
+        normalized: 'destinationFolderId',
+        placeholder: 'sem placeholder documental',
+        status: 'aguardando',
+        category: 'Dados do Caso'
+      },
+      {
+        origin: 'destinationFolderUrl',
+        normalized: 'destinationFolderUrl',
+        placeholder: 'sem placeholder documental',
+        status: 'aguardando',
+        category: 'Dados do Caso'
+      }
+    ];
+
+    const officeVars: PortalBossVar[] = [
+      {
+        origin: 'officeData.advogadoNome',
+        normalized: 'advogadoNome',
+        placeholder: '{{ADVOGADO_NOME}}',
+        status: 'configurado',
+        category: 'Dados do Escritório'
+      },
+      {
+        origin: 'officeData.advogadoOab',
+        normalized: 'advogadoOab',
+        placeholder: '{{ADVOGADO_OAB}}',
+        status: 'configurado',
+        category: 'Dados do Escritório'
+      },
+      {
+        origin: 'officeData.localAssinatura',
+        normalized: 'localAssinatura',
+        placeholder: '{{LOCAL_ASSINATURA}}',
+        status: 'configurado',
+        category: 'Dados do Escritório'
+      },
+      {
+        origin: 'officeData.dataAssinatura',
+        normalized: 'dataAssinatura',
+        placeholder: '{{DATA_ASSINATURA}}',
+        status: 'configurado',
+        category: 'Dados do Escritório'
+      }
+    ];
+
+    return [...clientVars, ...caseVars, ...officeVars];
   };
 
   const renderTabContent = (tabId: TabType) => {
@@ -132,35 +284,86 @@ export default function DocDetailView({ card, onBack }: DocDetailViewProps) {
       case 'placeholders':
         return (
           <div className="space-y-6">
-            <div className="border-b border-slate-100 pb-4">
-              <h3 className="text-sm font-bold text-slate-800">Mapeamento de Variáveis e Chaves</h3>
-              <p className="text-xs text-slate-400">Variáveis textuais em chaves duplas (ex: {"{{AUTO_VAR}}"}) identificadas no documento.</p>
+            <div className="border-b border-slate-150 pb-4">
+              <h3 className="text-sm font-bold text-slate-900">Dicionário de Variáveis Importadas do Portal BOSS</h3>
+              <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                Este dicionário mostra quais informações o GDI espera receber do Portal BOSS Clientes para preencher automaticamente este documento. As variáveis abaixo serão importadas do cadastro do cliente, dos dados do caso e dos dados fixos do escritório.
+              </p>
             </div>
 
-            <div className="space-y-4">
-              <div className="rounded-xl bg-slate-50 border border-slate-150 p-4">
-                <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-2.5 font-mono">Dicionário de Variáveis Mapeadas (Estrutura Estática)</p>
-                <div className="flex flex-wrap gap-2">
-                  {getMockPlaceholders().map((placeholder, idx) => (
-                    <span 
-                      key={idx} 
-                      className="bg-white border border-slate-200 text-slate-700 px-2.5 py-1 rounded-md text-[11px] font-mono shadow-xs font-medium cursor-default"
-                    >
-                      {placeholder}
-                    </span>
-                  ))}
-                </div>
+            {/* Visual Process Flow Diagram */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4.5 font-sans">
+              <span className="text-[10px] uppercase font-bold text-slate-400 font-mono tracking-wider block mb-3">Linha de Processamento de Dados</span>
+              <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs">
+                <span className="px-2.5 py-1.5 bg-blue-50 text-blue-700 border border-blue-100 rounded-md font-semibold font-mono">Portal BOSS</span>
+                <span className="text-slate-300">→</span>
+                <span className="px-2.5 py-1.5 bg-indigo-50 text-indigo-700 border border-indigo-100 rounded-md font-semibold font-mono">Payload Recebido</span>
+                <span className="text-slate-300">→</span>
+                <span className="px-2.5 py-1.5 bg-purple-50 text-purple-700 border border-purple-100 rounded-md font-semibold font-mono">Variáveis Importadas</span>
+                <span className="text-slate-300">→</span>
+                <span className="px-2.5 py-1.5 bg-amber-50 text-amber-700 border border-amber-100 rounded-md font-semibold font-mono">Normalização GDI</span>
+                <span className="text-slate-300">→</span>
+                <span className="px-2.5 py-1.5 bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-md font-semibold font-mono font-bold">Google Docs Placeholder</span>
               </div>
+            </div>
 
-              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-55/30 p-8 text-center flex flex-col items-center justify-center">
-                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-400 mb-3">
-                  <Brackets className="h-6 w-6 text-slate-500" />
-                </div>
-                <p className="text-xs font-semibold text-slate-600">Configuração de Placeholder Dinâmico</p>
-                <p className="mt-1 text-[11px] text-slate-400 max-w-sm">
-                  Área reservada para configuração futura.
-                </p>
-              </div>
+            {/* Structured Dictionary Table */}
+            <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="bg-slate-50 text-slate-500 font-mono uppercase text-[10px] tracking-wider border-b border-slate-200">
+                    <th className="py-2.5 px-4 font-bold">Origem no Portal BOSS</th>
+                    <th className="py-2.5 px-4 font-bold">Nome normalizado GDI</th>
+                    <th className="py-2.5 px-4 font-bold">Placeholder no Google Docs</th>
+                    <th className="py-2.5 px-4 font-bold">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-sans">
+                  {(() => {
+                    const variables = getPortalBossVariableDictionary(card.id);
+                    let lastCategory = '';
+                    return variables.map((item, idx) => {
+                      const showCategoryHeader = item.category !== lastCategory;
+                      lastCategory = item.category;
+                      return (
+                        <Fragment key={`item-group-${idx}`}>
+                          {showCategoryHeader && (
+                            <tr className="bg-slate-100/70 border-y border-slate-200">
+                              <td colSpan={4} className="py-2 px-4 text-[10px] font-bold font-mono tracking-wider uppercase text-slate-500">
+                                {item.category}
+                              </td>
+                            </tr>
+                          )}
+                          <tr className="hover:bg-slate-55/30 transition border-b border-slate-100">
+                            <td className="py-3 px-4 font-mono text-slate-600 font-semibold select-all">{item.origin}</td>
+                            <td className="py-3 px-4 font-mono text-slate-800 font-semibold select-all">{item.normalized}</td>
+                            <td className="py-3 px-4">
+                              {item.placeholder !== 'sem placeholder documental' ? (
+                                <span className="font-mono text-[11px] bg-blue-50 border border-blue-100 text-blue-750 px-2 py-0.5 rounded font-bold select-all">
+                                  {item.placeholder}
+                                </span>
+                              ) : (
+                                <span className="text-slate-400 italic font-medium">
+                                  sem placeholder documental
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4">
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase border ${
+                                item.status === 'configurado' 
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-150' 
+                                  : 'bg-amber-50 text-amber-700 border-amber-150'
+                              }`}>
+                                {item.status === 'configurado' ? 'configurado' : 'aguardando payload'}
+                              </span>
+                            </td>
+                          </tr>
+                        </Fragment>
+                      );
+                    });
+                  })()}
+                </tbody>
+              </table>
             </div>
           </div>
         );
