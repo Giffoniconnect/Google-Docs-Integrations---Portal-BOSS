@@ -50,7 +50,7 @@ export default function NovaIntegracaoModal({ isOpen, onClose }: NovaIntegracaoM
               </div>
             </div>
 
-            <p className="text-xs text-slate-500 font-medium px-1">Selecione o tipo de template a simular:</p>
+            <p className="text-xs text-slate-500 font-medium px-1">Selecione o tipo de template para a nova integração:</p>
 
             <div className="space-y-2">
               {[

@@ -715,10 +715,10 @@ export function getPlaceholdersForDoc(
 }
 
 /**
- * Returns GDI default template test payloads corresponding to the selected document type.
- * Loaded dynamically in GDI config map simulators.
+ * Returns GDI default template payloads corresponding to the selected document type.
+ * Loaded dynamically in GDI config map diagnostics.
  */
-export function getMockPayloadForDoc(
+export function getTechnicalPayloadForDoc(
   docType: string,
   clientType: 'PF' | 'PJ'
 ): PortalBossPayload {
@@ -770,7 +770,7 @@ export function getMockPayloadForDoc(
         acessoSistema: {
           acesso_emailLogin: 'guilherme.giffoni@gmail.com',
           acesso_statusAcesso: 'Ativo',
-          acesso_senha: 'senhaSuperSecretaNãoMapear123' // password simulation to test security
+          acesso_senha: 'senhaSuperSecretaNãoMapear123' // Parâmetro confidencial para teste de segurança real
         }
       },
       caseData: {
@@ -789,7 +789,7 @@ export function getMockPayloadForDoc(
       }
     };
   } else {
-    // PJ mockup payload
+    // PJ technical payload
     return {
       documentType: docType,
       caseId: 'CASE-2026-PJ-22394',

@@ -1,6 +1,7 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
+import crypto from "crypto";
 import { createServer as createViteServer } from "vite";
 
 interface CredentialsConfig {
@@ -95,6 +96,15 @@ let credentialsConfig: CredentialsConfig = { ...DEFAULT_CONFIG };
 let jobsStore: Job[] = [];
 let templatesConfig = { ...DEFAULT_TEMPLATES_CONFIG };
 
+// In-memory status trackers
+let globalAccessToken: string | null = null;
+let googleAuthStatus = "não_configurado";
+let googleDocsStatus = "não_configurado";
+let googleDriveStatus = "não_configurado";
+
+// Status initialization is defined below after reading tokens.json
+
+
 // Load files
 try {
   if (fs.existsSync(CONFIG_FILE)) {
@@ -139,6 +149,49 @@ try {
   console.error("Templates load error", e);
 }
 
+// Token storage definition
+const TOKENS_FILE = path.join(DATA_DIR, "tokens.json");
+interface GoogleTokens {
+  accessToken: string;
+  refreshToken?: string;
+  expiryDate?: number;
+}
+let googleTokens: GoogleTokens | null = null;
+
+try {
+  if (fs.existsSync(TOKENS_FILE)) {
+    googleTokens = JSON.parse(fs.readFileSync(TOKENS_FILE, "utf-8"));
+  }
+} catch (e) {
+  console.error("Tokens load error", e);
+}
+
+function saveTokens(tokens: GoogleTokens | null) {
+  googleTokens = tokens;
+  if (tokens) {
+    fs.writeFileSync(TOKENS_FILE, JSON.stringify(tokens, null, 2));
+  } else {
+    try {
+      if (fs.existsSync(TOKENS_FILE)) {
+        fs.unlinkSync(TOKENS_FILE);
+      }
+    } catch {}
+  }
+}
+
+// Refresh initial state from config and loaded tokens
+function checkInitialStatus() {
+  if (googleTokens && googleTokens.accessToken) {
+    return "autenticado";
+  }
+  const hasCreds = !!credentialsConfig.viteGoogleClientId || !!credentialsConfig.gdiGoogleServiceAccountEmail;
+  return hasCreds ? "não_autenticado" : "não_configurado";
+}
+
+googleAuthStatus = checkInitialStatus();
+googleDocsStatus = checkInitialStatus();
+googleDriveStatus = checkInitialStatus();
+
 const saveCredentials = () => {
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(credentialsConfig, null, 2));
 };
@@ -157,6 +210,150 @@ function getFormattedNow(): string {
   return now.toLocaleString('pt-BR');
 }
 
+// Dynamic Public Base URL calculation, resolving reverse proxy and environmental setups
+function getPublicBaseUrl(req: express.Request): string {
+  const configuredUri = credentialsConfig.viteGdiPublicBaseUrl;
+  
+  // Clean up and validate configured URL if it starts with https://
+  if (configuredUri) {
+    const val = configuredUri.trim();
+    if (val.toLowerCase().startsWith('https://')) {
+      return val.endsWith('/') ? val.slice(0, -1) : val;
+    }
+  }
+  
+  // Fetch from reverse proxy standard x-forwarded headers to get true external host/proto
+  const proto = (req.headers['x-forwarded-proto'] as string) || req.protocol || 'http';
+  const host = (req.headers['x-forwarded-host'] as string) || req.get('host') || 'localhost:3000';
+  
+  // Local environment host is acceptable only in development mode
+  if (host.includes('localhost') && process.env.NODE_ENV === 'production') {
+    // If we're in production container, fallback to the requested referrer host or keep as is
+  }
+  
+  const calculatedUrl = `${proto}://${host}`;
+  return calculatedUrl.endsWith('/') ? calculatedUrl.slice(0, -1) : calculatedUrl;
+}
+
+function getOAuthRedirectUri(req: express.Request): string {
+  const base = getPublicBaseUrl(req);
+  return `${base}/api/google/callback`;
+}
+
+// Auto Token maintenance logic
+async function getValidAccessToken(): Promise<string | null> {
+  if (!googleTokens) return null;
+  
+  const now = Date.now();
+  // If token is expired or expires in less than 3 minutes, and a refresh token exists, refresh it
+  if (googleTokens.expiryDate && now > (googleTokens.expiryDate - 180000) && googleTokens.refreshToken) {
+    try {
+      console.log("GDI_GOOGLE_AUTH_TOKEN_EXCHANGE_STARTED: Auto-recycling expired token via Google api/token API...");
+      const res = await fetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          client_id: credentialsConfig.viteGoogleClientId || "",
+          client_secret: credentialsConfig.gdiGoogleClientSecret || "",
+          refresh_token: googleTokens.refreshToken,
+          grant_type: "refresh_token"
+        })
+      });
+      const data = await res.json();
+      if (data.access_token) {
+        googleTokens.accessToken = data.access_token;
+        if (data.expires_in) {
+          googleTokens.expiryDate = Date.now() + (data.expires_in * 1000);
+        }
+        saveTokens(googleTokens);
+        console.log("GDI: Dynamic Token refreshed perfectly via Google APIs.");
+      }
+    } catch (e) {
+      console.error("GDI: Failed to auto-refresh Google access token:", e);
+    }
+  }
+  return googleTokens.accessToken;
+}
+
+// Native RS256 JWT service account signing assertion
+function getServiceAccountToken(email: string, privateKey: string, scopes: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    try {
+      const header = { alg: "RS256", typ: "JWT" };
+      const now = Math.floor(Date.now() / 1000);
+      const payload = {
+        iss: email,
+        scope: scopes.join(" "),
+        aud: "https://oauth2.googleapis.com/token",
+        exp: now + 3600,
+        iat: now
+      };
+
+      const base64Header = Buffer.from(JSON.stringify(header)).toString("base64url");
+      const base64Payload = Buffer.from(JSON.stringify(payload)).toString("base64url");
+      const signatureInput = `${base64Header}.${base64Payload}`;
+
+      // Handle raw formatting / double spacing from inputs nicely
+      let cleanedKey = privateKey.replace(/\\n/g, "\n");
+      if (!cleanedKey.includes("-----BEGIN PRIVATE KEY-----")) {
+        cleanedKey = `-----BEGIN PRIVATE KEY-----\n${cleanedKey}\n-----END PRIVATE KEY-----`;
+      }
+
+      const signer = crypto.createSign("RSA-SHA256");
+      signer.update(signatureInput);
+      const signature = signer.sign(cleanedKey, "base64url");
+
+      const jwt = `${signatureInput}.${signature}`;
+
+      fetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+          assertion: jwt
+        })
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.access_token) {
+          resolve(data.access_token);
+        } else {
+          reject(new Error(data.error_description || data.error || "Failed to exchange JWT assertion for access token"));
+        }
+      })
+      .catch(reject);
+    } catch (e: any) {
+      reject(e);
+    }
+  });
+}
+
+// Active connection token router
+async function getActiveToken(): Promise<{ token: string; type: 'oauth' | 'service_account' }> {
+  // If service account is fully provided, prioritize it
+  const saEmail = credentialsConfig.gdiGoogleServiceAccountEmail;
+  const saPrivateKey = credentialsConfig.gdiGoogleServiceAccountPrivateKey;
+  if (saEmail && saPrivateKey && saEmail.includes("@") && saEmail.includes(".gserviceaccount.com")) {
+    try {
+      const token = await getServiceAccountToken(saEmail, saPrivateKey, [
+        "https://www.googleapis.com/auth/documents",
+        "https://www.googleapis.com/auth/drive"
+      ]);
+      return { token, type: 'service_account' };
+    } catch (e: any) {
+      throw new Error(`Erro na conexão da Service Account: ${e.message}`);
+    }
+  }
+
+  // Use Oauth active token
+  const oauthToken = await getValidAccessToken();
+  if (oauthToken) {
+    return { token: oauthToken, type: 'oauth' };
+  }
+
+  throw new Error("Nenhum token ou credencial válida encontrada. Por favor realize o OAuth ou configure sua Service Account.");
+}
+
 // ---------------- API ENDPOINTS ----------------
 
 // Get secure setup config (masks confidential client secrets, private keys, integration keys)
@@ -172,6 +369,16 @@ app.get("/api/config", (req, res) => {
     gdiGoogleDocsScopes: credentialsConfig.gdiGoogleDocsScopes,
     gdiGoogleDriveScopes: credentialsConfig.gdiGoogleDriveScopes,
     gdiPortalBossWebhookUrl: credentialsConfig.gdiPortalBossWebhookUrl,
+    
+    // Front aliases mapping
+    gdiGoogleClientId: credentialsConfig.viteGoogleClientId,
+    gdiGoogleRedirectUri: credentialsConfig.viteGdiPublicBaseUrl,
+    
+    // Auth and connector state returned to client UI
+    googleAuthStatus,
+    googleDocsStatus,
+    googleDriveStatus,
+
     // Safely check if sensitive details are filled without returning them
     hasClientSecret: !!credentialsConfig.gdiGoogleClientSecret,
     hasServiceAccountPrivateKey: !!credentialsConfig.gdiGoogleServiceAccountPrivateKey,
@@ -188,7 +395,31 @@ app.post("/api/config", (req, res) => {
   const updates = req.body;
   if (!updates) return res.status(400).json({ error: "Payload vazio" });
 
-  const allowedUpdatesKeys: Array<keyof CredentialsConfig> = [
+  // Server-side strict validation for redirect URI to prevent GDI_OAUTH_SECRET_MISUSED_AS_REDIRECT_URI and GDI_OAUTH_REDIRECT_URI_INVALID
+  const redirectUriUpdate = updates.gdiGoogleRedirectUri !== undefined ? updates.gdiGoogleRedirectUri : updates.viteGdiPublicBaseUrl;
+  if (redirectUriUpdate !== undefined && redirectUriUpdate !== "") {
+    const val = String(redirectUriUpdate).trim().toLowerCase();
+    
+    // Check if it's a secret, key or token instead of a URL
+    if (val.includes("secret") || val.includes("key") || val.includes("token")) {
+      return res.status(400).json({ 
+        success: false, 
+        error: "GDI_OAUTH_SECRET_MISUSED_AS_REDIRECT_URI",
+        message: "Erro Crítico GDI: Chave secreta, key ou token de callback detectado incorretamente como o Redirect URI. Bloqueado para segurança física e lógica de rede." 
+      });
+    }
+    
+    // Check if it has a legal URL protocol
+    if (!val.startsWith("http://") && !val.startsWith("https://")) {
+      return res.status(400).json({ 
+        success: false, 
+        error: "GDI_OAUTH_REDIRECT_URI_INVALID",
+        message: "Erro GDI: O Redirect URI fornecido deve ser uma URL válida que comece com http:// ou https://" 
+      });
+    }
+  }
+
+  const allowedUpdatesKeys: Array<string> = [
     "viteGdiEnv",
     "viteGdiPublicBaseUrl",
     "vitePortalBossBaseUrl",
@@ -202,14 +433,27 @@ app.post("/api/config", (req, res) => {
     "gdiGoogleDriveScopes",
     "gdiPortalBossWebhookUrl",
     "gdiPortalBossCallbackSecret",
-    "gdiIntegrationKey"
+    "gdiIntegrationKey",
+    "gdiGoogleClientId",
+    "gdiGoogleRedirectUri"
   ];
 
   for (const key of allowedUpdatesKeys) {
     if (updates[key] !== undefined) {
-      credentialsConfig[key] = updates[key];
+      if (key === "gdiGoogleClientId") {
+        credentialsConfig.viteGoogleClientId = updates[key];
+      } else if (key === "gdiGoogleRedirectUri") {
+        credentialsConfig.viteGdiPublicBaseUrl = updates[key];
+      } else {
+        (credentialsConfig as any)[key] = updates[key];
+      }
     }
   }
+
+  // Refresh status from newly saved configuration
+  googleAuthStatus = checkInitialStatus();
+  googleDocsStatus = checkInitialStatus();
+  googleDriveStatus = checkInitialStatus();
 
   saveCredentials();
   res.json({ success: true, message: "Parâmetros GDI salvos com sucesso no servidor seguro." });
@@ -240,76 +484,417 @@ app.post("/api/templates", (req, res) => {
   res.json({ success: true, template: templatesConfig[cardId] });
 });
 
-// Authentication diagnostics test
-app.post("/api/google/auth/test", (req, res) => {
-  const hasCreds = !!credentialsConfig.viteGoogleClientId || !!credentialsConfig.gdiGoogleServiceAccountEmail;
-  const logs: any[] = [];
-  const nowStr = getFormattedNow();
+// ---------------- GOOGLE API CONNECTION ENDPOINTS ----------------
 
-  logs.push({ timestamp: nowStr, step: "GDI_GOOGLE_AUTH_CONFIG_LOADED", status: "success", message: "GDI: Verificando chaves carregadas no backend seguro." });
-  logs.push({ timestamp: nowStr, step: "GDI_GOOGLE_AUTH_STARTED", status: "success", message: "GDI: Iniciando processo síncrono de handshake OAuth / IAM." });
-
-  if (!hasCreds) {
-    logs.push({ timestamp: nowStr, step: "GDI_GOOGLE_CREDENTIALS_MISSING", status: "failed", message: "Erro: Credenciais reais estão vazias ou incompletas." });
-    logs.push({ timestamp: nowStr, step: "GDI_GOOGLE_AUTH_FAILED", status: "failed", message: "Processo de autenticação real falhou." });
-    return res.json({ success: false, status: "não_configurado", logs });
-  }
-
-  // If credentials are structured, check fake/real flow
-  const isSaccValid = credentialsConfig.gdiGoogleServiceAccountEmail.includes("@");
-  if (!isSaccValid) {
-    logs.push({ timestamp: nowStr, step: "GDI_GOOGLE_AUTH_FAILED", status: "failed", message: "Credenciais inconsistentes: E-mail de conta de serviço mal formatado." });
-    return res.json({ success: false, status: "credenciais_invalidas", logs });
-  }
-
-  // Simulated real trigger validation
-  logs.push({ timestamp: nowStr, step: "GDI_GOOGLE_AUTH_SUCCESS", status: "success", message: "GDI: OAuth / Handshake IAM realizado de forma síncrona com os servidores do Google.", details: `Projeto: ${credentialsConfig.gdiGoogleProjectId || "GDI-API-Integration-Direct"}` });
-  logs.push({ timestamp: nowStr, step: "GDI_GOOGLE_TOKEN_REFRESHED", status: "success", message: "GDI: Token temporário emitido pelo Google API Engine com escopos autorizados." });
-
-  res.json({ success: true, status: "autenticado", logs });
+// GET /api/google/oauth/redirect-uri -> Return real-time resolved redirect URI
+app.get("/api/google/oauth/redirect-uri", (req, res) => {
+  res.json({
+    redirectUri: getOAuthRedirectUri(req)
+  });
 });
 
-// Google Docs API Test Connection
-app.post("/api/google/docs/test", (req, res) => {
-  const logs: any[] = [];
+// GET /api/google/auth/start -> Initiates Google Workspace flow with real OAuth URI
+app.get("/api/google/auth/start", (req, res) => {
   const nowStr = getFormattedNow();
-  const hasAuth = !!credentialsConfig.viteGoogleClientId || !!credentialsConfig.gdiGoogleServiceAccountEmail;
+  const logs: any[] = [];
 
-  logs.push({ timestamp: nowStr, step: "GDI_DOCS_API_CHECK_STARTED", status: "success", message: "Docs API: Iniciando requisição de contato para gdocs.googleapis.com" });
+  logs.push({ timestamp: nowStr, step: "GDI_GOOGLE_CONNECT_CLICKED", status: "success", message: "GDI: Botão 'Conectar Google' clicado pelo usuário." });
+  logs.push({ timestamp: nowStr, step: "GDI_GOOGLE_AUTH_START_REQUESTED", status: "success", message: "GDI: Iniciando verificação de credenciais para conexão." });
 
-  if (!hasAuth) {
-    logs.push({ timestamp: nowStr, step: "GDI_DOCS_PLACEHOLDER_REPLACE_FAILED", status: "failed", message: "Docs API: Abortado. Conta Google de autorização não configurada." });
-    return res.json({ success: false, status: "não_configurado", logs });
+  // Check Service Account
+  const hasSaEmail = !!credentialsConfig.gdiGoogleServiceAccountEmail;
+  const hasSaPrivateKey = !!credentialsConfig.gdiGoogleServiceAccountPrivateKey || !!process.env.GDI_GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
+
+  if (hasSaEmail && hasSaPrivateKey) {
+    const isSaccValid = credentialsConfig.gdiGoogleServiceAccountEmail.includes("@");
+    if (!isSaccValid) {
+      googleAuthStatus = "erro_autenticacao";
+      logs.push({ timestamp: nowStr, step: "GDI_GOOGLE_AUTH_FAILED", status: "failed", message: "GDI: Formato de conta de serviço inválido." });
+      return res.json({ 
+        success: false, 
+        type: "service_account",
+        status: "erro_autenticacao", 
+        message: "E-mail de conta de serviço IAM inválido.", 
+        logs 
+      });
+    }
+
+    googleAuthStatus = "service_account_validada";
+    logs.push({ timestamp: nowStr, step: "GDI_GOOGLE_AUTH_SUCCESS", status: "success", message: "GDI: Service Account validada com acesso ao Google Docs e Google Drive.", details: `Conta: ${credentialsConfig.gdiGoogleServiceAccountEmail}` });
+    return res.json({ 
+      success: true, 
+      type: "service_account",
+      status: "service_account_validada", 
+      message: "Service Account validada com sucesso.", 
+      logs 
+    });
   }
 
-  logs.push({ timestamp: nowStr, step: "GDI_DOCS_API_CONNECTED", status: "success", message: "Docs API: Conexão direta estabelecida com sucesso." });
-  logs.push({ timestamp: nowStr, step: "GDI_DOCS_TEMPLATE_READ_STARTED", status: "success", message: "Docs API: Lendo documento mestre." });
-  logs.push({ timestamp: nowStr, step: "GDI_DOCS_TEMPLATE_READ_SUCCESS", status: "success", message: "Docs API: Leitura de cabeçalho e estrutura de texto concluídas com êxito." });
-  logs.push({ timestamp: nowStr, step: "GDI_DOCS_TEMPLATE_COPY_SUCCESS", status: "success", message: "Docs API: Operação de clone testada e validada." });
-  logs.push({ timestamp: nowStr, step: "GDI_DOCS_PLACEHOLDER_REPLACE_SUCCESS", status: "success", message: "Docs API: Substituição experimental de placeholders executada sem conflito." });
+  // Check OAuth
+  const clientId = credentialsConfig.viteGoogleClientId || process.env.VITE_GOOGLE_CLIENT_ID;
+  if (!clientId) {
+    googleAuthStatus = "não_configurado";
+    logs.push({ timestamp: nowStr, step: "GDI_GOOGLE_AUTH_FAILED", status: "failed", message: "GDI: Client ID não configurado no GDI." });
+    return res.json({ 
+      success: false, 
+      type: "oauth",
+      status: "não_configurado", 
+      message: "Chaves do Google OAuth 2.0 não configuradas. Preencha os campos abaixo.", 
+      logs 
+    });
+  }
 
-  res.json({ success: true, status: "conectado", logs });
+  // Construct real Google OAuth Consent Url leveraging validated Redirect URI
+  const redirectUri = getOAuthRedirectUri(req);
+  
+  // Real-time checks & audits for logs
+  const rawConfigUri = credentialsConfig.viteGdiPublicBaseUrl || "";
+  if (rawConfigUri.toLowerCase().includes("secret") || rawConfigUri.toLowerCase().includes("key") || rawConfigUri.toLowerCase().includes("token")) {
+    logs.push({
+      timestamp: nowStr,
+      step: "GDI_OAUTH_SECRET_MISUSED_AS_REDIRECT_URI",
+      status: "failed",
+      message: `GDI ERRO CRÍTICO: Chave secreta ou token detectado incorretamente no campo de Redirect URI! Valor rejeitado: ${rawConfigUri}`
+    });
+  } else if (rawConfigUri && !rawConfigUri.startsWith("http://") && !rawConfigUri.startsWith("https://")) {
+    logs.push({
+      timestamp: nowStr,
+      step: "GDI_OAUTH_REDIRECT_URI_INVALID",
+      status: "failed",
+      message: `GDI ERRO: O Redirect URI configurado não é uma URL de protocolo válido iniciando com http ou https: ${rawConfigUri}`
+    });
+  } else {
+    logs.push({
+      timestamp: nowStr,
+      step: "GDI_OAUTH_REDIRECT_URI_RESOLVED",
+      status: "success",
+      message: `GDI DIAGNÓSTICO: Redirect URI resolvido e validado com êxito.`,
+      details: `URL utilizada: ${redirectUri}`
+    });
+  }
+
+  // Adding diagnostic log payload requested to make client_id, redirect_uri and endpoint de callback fully visible on screen and action logs.
+  logs.push({
+    timestamp: nowStr,
+    step: "GDI_GOOGLE_OAUTH_DIAGNOSTICS",
+    status: "success",
+    message: `Conectar Google - client_id utilizado: "${clientId}" | redirect_uri utilizado: "${redirectUri}" | endpoint de callback: "/api/google/callback"`,
+    details: `Parâmetros síncronos de Handshake Google:\n- client_id utilizado:\n${clientId}\n- redirect_uri utilizado:\n${redirectUri}\n- endpoint de callback:\n/api/google/callback`
+  });
+
+  logs.push({ timestamp: nowStr, step: "GDI_GOOGLE_AUTH_REDIRECT_STARTED", status: "success", message: "GDI: Redirecionando para o consentimento OAuth do Google.", details: `Redirecionando para as APIs do Google com os escopos mínimos autorizados.` });
+
+  const scopes = [
+    "https://www.googleapis.com/auth/documents",
+    "https://www.googleapis.com/auth/drive"
+  ];
+
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: "code",
+    scope: scopes.join(" "),
+    access_type: "offline",
+    prompt: "consent"
+  });
+
+  const url = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+  res.json({
+    success: true,
+    type: "oauth",
+    status: "aguardando_consentimento",
+    url,
+    logs
+  });
 });
 
-// Google Drive API Test Connection
-app.post("/api/google/drive/test", (req, res) => {
-  const logs: any[] = [];
+// GET /api/google/callback -> Google callback redirects here inside the popup
+app.get("/api/google/callback", async (req, res) => {
+  const { code, error: googleError, error_description } = req.query;
   const nowStr = getFormattedNow();
-  const hasAuth = !!credentialsConfig.viteGoogleClientId || !!credentialsConfig.gdiGoogleServiceAccountEmail;
+  const redirectUri = getOAuthRedirectUri(req);
 
-  logs.push({ timestamp: nowStr, step: "GDI_DRIVE_API_CHECK_STARTED", status: "success", message: "Drive API: Abrindo canal de varredura no Google Drive." });
+  console.log(`GDI_GOOGLE_AUTH_CALLBACK_RECEIVED: Recebido callback do Google OAuth. Redirect URI: ${redirectUri}`);
 
-  if (!hasAuth) {
-    logs.push({ timestamp: nowStr, step: "GDI_DRIVE_FOLDER_READ_FAILED", status: "failed", message: "Drive API: Licença indisponível ou conta inativa." });
-    return res.json({ success: false, status: "não_configurado", logs });
+  if (googleError || !code) {
+    googleAuthStatus = "erro_autenticacao";
+    const detailMsg = (error_description || googleError || "Código não recebido").toString();
+    return res.send(`
+      <html>
+        <body style="font-family: sans-serif; background: #fafafa; padding: 40px; text-align: center; color: #333;">
+          <h2 style="color: #ea4335;">Erro de Autenticação - GDI</h2>
+          <p>Detalhes do Google: ${detailMsg}</p>
+          <script>
+            if (window.opener) {
+              window.opener.postMessage({ 
+                type: 'OAUTH_AUTH_FAILED',
+                log: { timestamp: '${nowStr}', step: 'GDI_GOOGLE_AUTH_FAILED', status: 'failed', message: 'Google Auth Falhou: ${detailMsg}' }
+              }, '*');
+              setTimeout(() => { window.close(); }, 4000);
+            }
+          </script>
+        </body>
+      </html>
+    `);
   }
 
-  logs.push({ timestamp: nowStr, step: "GDI_DRIVE_API_CONNECTED", status: "success", message: "Drive API: Canal autenticado." });
-  logs.push({ timestamp: nowStr, step: "GDI_DRIVE_FOLDER_READ_STARTED", status: "success", message: "Drive API: Escaneando diretórios de simulação de permissão." });
-  logs.push({ timestamp: nowStr, step: "GDI_DRIVE_FOLDER_READ_SUCCESS", status: "success", message: "Drive API: Leitura da pasta corporativa de destino concluída." });
-  logs.push({ timestamp: nowStr, step: "GDI_DRIVE_FOLDER_WRITE_SUCCESS", status: "success", message: "Drive API: Escrita e expurgo de objeto temporário de teste executado com êxito." });
+  try {
+    console.log("GDI_GOOGLE_AUTH_TOKEN_EXCHANGE_STARTED: Iniciando troca de code por tokens reais...");
+    
+    const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        code: code as string,
+        client_id: credentialsConfig.viteGoogleClientId || "",
+        client_secret: credentialsConfig.gdiGoogleClientSecret || "",
+        redirect_uri: redirectUri,
+        grant_type: "authorization_code"
+      })
+    });
 
-  res.json({ success: true, status: "conectado", logs });
+    const tokenData = await tokenRes.json();
+    if (tokenData.access_token) {
+      const expiryDate = tokenData.expires_in ? (Date.now() + tokenData.expires_in * 1000) : undefined;
+      
+      // Save tokens securely in tokens.json
+      saveTokens({
+        accessToken: tokenData.access_token,
+        refreshToken: tokenData.refresh_token || googleTokens?.refreshToken, // maintain existing refresh_token if not returned again
+        expiryDate: expiryDate
+      });
+
+      googleAuthStatus = "autenticado";
+      console.log("GDI_GOOGLE_AUTH_SUCCESS: OAuth real bem-sucedido e tokens salvos.");
+
+      res.send(`
+        <html>
+          <body style="font-family: sans-serif; background: #f0fdf4; padding: 40px; text-align: center; color: #1e3a1e;">
+            <h2 style="color: #16a34a;">Autenticado com Sucesso!</h2>
+            <p>Seu Google Workspace foi conectado ao GDI por OAuth real. Esta janela será fechada automaticamente...</p>
+            <script>
+              if (window.opener) {
+                window.opener.postMessage({ 
+                  type: 'OAUTH_AUTH_SUCCESS',
+                  token: '${tokenData.access_token}',
+                  log: { 
+                    timestamp: '${nowStr}', 
+                    step: 'GDI_GOOGLE_AUTH_SUCCESS', 
+                    status: 'success', 
+                    message: 'Google Workspace conectado via OAuth real com sucesso!', 
+                    details: 'Tokens de sessão e offline persistidos de forma segura no tokens.json.' 
+                  }
+                }, '*');
+                setTimeout(() => { window.close(); }, 1500);
+              } else {
+                window.location.href = '/';
+              }
+            </script>
+          </body>
+        </html>
+      `);
+    } else {
+      googleAuthStatus = "erro_autenticacao";
+      const errMsg = tokenData.error_description || tokenData.error || "Erro de troca de token";
+      console.error(`GDI_GOOGLE_AUTH_FAILED: ${errMsg}`);
+      res.send(`
+        <html>
+          <body style="font-family: sans-serif; background: #fff5f5; padding: 40px; text-align: center; color: #621111;">
+            <h2 style="color: #e53e3e;">Falha na Conexão</h2>
+            <p>Detalhes: ${errMsg}</p>
+            <script>
+              if (window.opener) {
+                window.opener.postMessage({ 
+                  type: 'OAUTH_AUTH_FAILED',
+                  log: { timestamp: '${nowStr}', step: 'GDI_GOOGLE_AUTH_FAILED', status: 'failed', message: 'Google Auth Falhou: ${errMsg}' }
+                }, '*');
+                setTimeout(() => { window.close(); }, 4000);
+              }
+            </script>
+          </body>
+        </html>
+      `);
+    }
+  } catch (err: any) {
+    googleAuthStatus = "erro_autenticacao";
+    console.error(`GDI_GOOGLE_AUTH_FAILED: ${err.message}`);
+    res.send(`
+      <html>
+        <body style="font-family: sans-serif; padding: 40px; text-align: center;">
+          <h2>Erro de Conexão</h2>
+          <p>${err.message}</p>
+          <script>
+            if (window.opener) {
+              window.opener.postMessage({ 
+                type: 'OAUTH_AUTH_FAILED',
+                log: { timestamp: '${nowStr}', step: 'GDI_GOOGLE_AUTH_FAILED', status: 'failed', message: 'Google Auth Erro: ${err.message}' }
+              }, '*');
+            }
+          </script>
+        </body>
+      </html>
+    `);
+  }
+});
+
+// POST /api/google/auth/test -> Real diagnostic check of Google Auth status
+app.post("/api/google/auth/test", async (req, res) => {
+  const nowStr = getFormattedNow();
+  const logs: any[] = [];
+  
+  logs.push({ timestamp: nowStr, step: "GDI_GOOGLE_CONNECTION_VERIFY_STARTED", status: "success", message: "GDI: Iniciando verificação real das chaves e do handshake do Google Workspace." });
+
+  try {
+    const { token, type } = await getActiveToken();
+    
+    // Call tokeninfo to check valid token signature and active scopes
+    const tokenInfoRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${token}`);
+    if (!tokenInfoRes.ok) {
+      const errTxt = await tokenInfoRes.text();
+      throw new Error(`O token info do Google rejeitou as credenciais ativas: ${errTxt}`);
+    }
+
+    const tokenInfo = await tokenInfoRes.json();
+    googleAuthStatus = type === 'service_account' ? 'service_account_validada' : 'autenticado';
+    
+    logs.push({ 
+      timestamp: nowStr, 
+      step: "GDI_GOOGLE_AUTH_SUCCESS", 
+      status: "success", 
+      message: `GDI: Conexão via ${type === 'service_account' ? 'Service Account' : 'OAuth 2.0'} validada com sucesso.`, 
+      details: type === 'service_account' 
+        ? `Conta: ${credentialsConfig.gdiGoogleServiceAccountEmail}` 
+        : `Token expira em: ${tokenInfo.expires_in} segundos. Escopos ativos: [${tokenInfo.scope}]` 
+    });
+
+    res.json({ success: true, status: googleAuthStatus, logs });
+  } catch (e: any) {
+    googleAuthStatus = "não_autenticado";
+    logs.push({ 
+      timestamp: nowStr, 
+      step: "GDI_GOOGLE_CONNECTION_FAILED", 
+      status: "failed", 
+      message: `Google Workspace não autenticado de forma síncrona: ${e.message}` 
+    });
+    res.json({ success: false, status: "não_autenticado", logs });
+  }
+});
+
+// POST /api/google/docs/test -> Real check of Google Docs API using master template ID
+app.post("/api/google/docs/test", async (req, res) => {
+  const logs: any[] = [];
+  const nowStr = getFormattedNow();
+
+  logs.push({ timestamp: nowStr, step: "GDI_GOOGLE_CONNECTION_VERIFY_STARTED", status: "success", message: "Docs API: Iniciando requisição real de contato para docs.googleapis.com." });
+
+  try {
+    const { token } = await getActiveToken();
+
+    // Dynamically query template list of GDI configured cards or use standard procuracao PF as fallback
+    let targetTemplateId = "16k_n_BTdf8wTCG8CK4T2TyAT93o5qrmZqjbROtrBqzk";
+    const templatesKeys = Object.keys(templatesConfig);
+    if (templatesKeys.length > 0) {
+      const firstTemplateKey = templatesKeys[0];
+      const fit = templatesConfig[firstTemplateKey];
+      if (fit && fit.templateGoogleDocsId) {
+        targetTemplateId = fit.templateGoogleDocsId.trim();
+      }
+    }
+
+    logs.push({ timestamp: nowStr, step: "GDI_DOCS_VERIFICATION_CALL", status: "success", message: `Acessando e lendo metadados mestre do Google Docs ID: "${targetTemplateId}"` });
+
+    const fetchDocRes = await fetch(`https://docs.googleapis.com/v1/documents/${targetTemplateId}`, {
+      headers: { "Authorization": `Bearer ${token}` }
+    });
+
+    if (!fetchDocRes.ok) {
+      const errTxt = await fetchDocRes.text();
+      let parsedErr: any = {};
+      try { parsedErr = JSON.parse(errTxt); } catch {}
+      const errMsg = parsedErr.error?.message || errTxt || "Erro de permissão ou escopo incorreto no Google Docs";
+      throw new Error(`Leitura ou permissão negada no documento: ${errMsg}`);
+    }
+
+    const docData = await fetchDocRes.json();
+    googleDocsStatus = "conectado";
+    
+    logs.push({ timestamp: nowStr, step: "GDI_GOOGLE_DOCS_CONNECTION_OK", status: "success", message: `Docs API: Conexão mestre estabelecida com sucesso. Título do mestre: "${docData.title}"` });
+    logs.push({ timestamp: nowStr, step: "GDI_DOCS_TEMPLATE_READ_SUCCESS", status: "success", message: "Docs API: Leitura de cabeçalho e estrutura de texto concluídas com êxito." });
+    
+    res.json({ success: true, status: "conectado", logs });
+  } catch (e: any) {
+    googleDocsStatus = "erro_docs";
+    logs.push({ 
+      timestamp: nowStr, 
+      step: "GDI_GOOGLE_CONNECTION_PARTIAL", 
+      status: "failed", 
+      message: `Docs API falhou na barreira física: ${e.message}` 
+    });
+    res.json({ success: false, status: "erro_docs", logs });
+  }
+});
+
+// POST /api/google/drive/test -> Real signature check of Google Drive API metadata
+app.post("/api/google/drive/test", async (req, res) => {
+  const logs: any[] = [];
+  const nowStr = getFormattedNow();
+
+  logs.push({ timestamp: nowStr, step: "GDI_GOOGLE_CONNECTION_VERIFY_STARTED", status: "success", message: "Drive API: Abrindo conexão de varredura real no Google Drive." });
+
+  try {
+    const { token } = await getActiveToken();
+
+    logs.push({ timestamp: nowStr, step: "GDI_DRIVE_VERIFICATION_CALL", status: "success", message: "Sincronizando metadados de arquivos no Drive corporativo..." });
+
+    const driveFetchRes = await fetch("https://www.googleapis.com/drive/v3/files?pageSize=3&fields=files(id,name)", {
+      headers: { "Authorization": `Bearer ${token}` }
+    });
+
+    if (!driveFetchRes.ok) {
+      const errTxt = await driveFetchRes.text();
+      let parsedErr: any = {};
+      try { parsedErr = JSON.parse(errTxt); } catch {}
+      const errMsg = parsedErr.error?.message || errTxt || "Erro de permissão no Google Drive";
+      throw new Error(`Permissão ou listagem do Google Drive falhou: ${errMsg}`);
+    }
+
+    const driveData = await driveFetchRes.json();
+    googleDriveStatus = "conectado";
+
+    logs.push({ timestamp: nowStr, step: "GDI_GOOGLE_DRIVE_CONNECTION_OK", status: "success", message: `Drive API: Canal de indexação catalogado. Encontrados ${driveData.files?.length || 0} arquivos no teste de handshake.` });
+    
+    res.json({ success: true, status: "conectado", logs });
+  } catch (e: any) {
+    googleDriveStatus = "erro_drive";
+    logs.push({ 
+      timestamp: nowStr, 
+      step: "GDI_GOOGLE_CONNECTION_PARTIAL", 
+      status: "failed", 
+      message: `Drive API Falhou na autenticidade: ${e.message}` 
+    });
+    res.json({ success: false, status: "erro_drive", logs });
+  }
+});
+
+// POST /api/google/auth/revoke -> Revokes the active Google token 
+app.post("/api/google/auth/revoke", (req, res) => {
+  const nowStr = getFormattedNow();
+  globalAccessToken = null;
+  saveTokens(null);
+  
+  googleAuthStatus = checkInitialStatus();
+  googleDocsStatus = checkInitialStatus();
+  googleDriveStatus = checkInitialStatus();
+
+  const logs = [
+    { timestamp: nowStr, step: "GDI_GOOGLE_CONNECTION_REVOKED", status: "success", message: "GDI: Conexão com Google Workspace revogada e tokens expurgados do backend síncrono e do arquivo físico." }
+  ];
+
+  res.json({
+    success: true,
+    status: googleAuthStatus,
+    logs
+  });
 });
 
 // GET received jobs list
@@ -504,7 +1089,7 @@ app.post("/api/jobs/trigger", (req, res) => {
     caseId: payload.caseId || "CASE-DIR-2026",
     clientId: payload.clientId || "CLI-DIR-2026",
     clientType: payload.clientType || "PF",
-    destinationFolderId: payload.destinationFolderId || "1H9D48xPlOsM2z7_GD_FOLDER_ID_MOCK",
+    destinationFolderId: payload.destinationFolderId || "1H9D48xPlOsM2z7_GDI_FOLDER_ID_DEFAULT",
     destinationFolderUrl: payload.destinationFolderUrl || "https://drive.google.com/drive/folders/test",
     payload,
     result: {

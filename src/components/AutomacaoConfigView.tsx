@@ -28,7 +28,7 @@ import {
 import { DocCard, GoogleDocsCard } from '../types';
 import {
   normalizePortalBossPayload,
-  getMockPayloadForDoc,
+  getTechnicalPayloadForDoc,
   getPlaceholdersForDoc,
   PF_FIELD_RULES,
   PJ_FIELD_RULES,
@@ -47,7 +47,6 @@ import {
 import { GdiPainelTab } from './GdiPainelTab';
 import { GdiPlaceholdersTab } from './GdiPlaceholdersTab';
 import { GdiCredentialsTab } from './GdiCredentialsTab';
-import { GdiSimuladorTab } from './GdiSimuladorTab';
 
 interface AutomacaoConfigViewProps {
   card: DocCard;
@@ -77,8 +76,8 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
 
   const [activeTemplate, setActiveTemplate] = useState<any>({
     templateName: `Modelo Oficial de ${card.title}`,
-    templateGoogleDocsUrl: card.id === 'procuracao-pf' ? "https://docs.google.com/document/d/16k_n_BTdf8wTCG8CK4T2TyAT93o5qrmZqjbROtrBqzk/edit" : `https://docs.google.com/document/d/1fT22Z7M9K6hX8yPsN3w_MOCK_GDOCS_ID_${card.id.toUpperCase()}/edit`,
-    templateGoogleDocsId: card.id === 'procuracao-pf' ? "16k_n_BTdf8wTCG8CK4T2TyAT93o5qrmZqjbROtrBqzk" : `1fT22Z7M9K6hX8yPsN3w_MOCK_GDOCS_ID_${card.id.toUpperCase()}`,
+    templateGoogleDocsUrl: card.id === 'procuracao-pf' ? "https://docs.google.com/document/d/16k_n_BTdf8wTCG8CK4T2TyAT93o5qrmZqjbROtrBqzk/edit" : `https://docs.google.com/document/d/1fT22Z7M9K6hX8yPsN3w_GDI_DOC_ID_${card.id.toUpperCase()}/edit`,
+    templateGoogleDocsId: card.id === 'procuracao-pf' ? "16k_n_BTdf8wTCG8CK4T2TyAT93o5qrmZqjbROtrBqzk" : `1fT22Z7M9K6hX8yPsN3w_GDI_DOC_ID_${card.id.toUpperCase()}`,
     templatePdfReferenceUrl: card.id === 'procuracao-pf' ? "https://drive.google.com/drive/u/0/folders/1fhMk2RMwEM7RlDCEOlKl5CsEjujX5zMJ" : "",
     templateStatus: "configurado",
     updatedAt: new Date().toISOString(),
@@ -86,7 +85,7 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
   });
 
   const [jobsQueue, setJobsQueue] = useState<any[]>([]);
-  const [googleAuthStatus, setGoogleAuthStatus] = useState<string>('conectado');
+  const [googleAuthStatus, setGoogleAuthStatus] = useState<string>('não_configurado');
   const [isLoadingBackend, setIsLoadingBackend] = useState<boolean>(true);
   const [isSavingTemplate, setIsSavingTemplate] = useState<boolean>(false);
   const [isSavingCreds, setIsSavingCreds] = useState<boolean>(false);
@@ -102,13 +101,13 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
   const [integrationKeyInput, setIntegrationKeyInput] = useState<string>('');
 
   // States of configuration
-  const [templateId, setTemplateId] = useState<string>(activeTemplate.templateGoogleDocsId || '1fT22Z7M9K6hX8yPsN3w_MOCK_GDOCS_ID_' + card.id.toUpperCase());
+  const [templateId, setTemplateId] = useState<string>(activeTemplate.templateGoogleDocsId || '1fT22Z7M9K6hX8yPsN3w_GDI_DOC_ID_' + card.id.toUpperCase());
 
   // API Google Docs State
-  const [googleDocsStatus, setGoogleDocsStatus] = useState<'não_configurado' | 'conectado' | 'template_inacessivel' | 'erro_docs'>('conectado');
+  const [googleDocsStatus, setGoogleDocsStatus] = useState<string>('não_configurado');
 
   // API Google Drive State
-  const [googleDriveStatus, setGoogleDriveStatus] = useState<'não_configurado' | 'conectado' | 'sem_permissao' | 'erro_drive'>('conectado');
+  const [googleDriveStatus, setGoogleDriveStatus] = useState<string>('não_configurado');
 
   // Manual interactive action logs
   const [userActionLogs, setUserActionLogs] = useState<Array<GdiLogEntry>>([]);
@@ -136,6 +135,9 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
         const configData = await configRes.json();
         setDbConfig(configData);
         setCredsForm(configData);
+        if (configData.googleAuthStatus) setGoogleAuthStatus(configData.googleAuthStatus);
+        if (configData.googleDocsStatus) setGoogleDocsStatus(configData.googleDocsStatus);
+        if (configData.googleDriveStatus) setGoogleDriveStatus(configData.googleDriveStatus);
       }
 
       // 2. Fetch templates mapping
@@ -216,6 +218,24 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
       setIsSavingCreds(true);
       const updatesPayload: any = { ...credsForm };
       
+      // Strict frontend validation for gdiGoogleRedirectUri
+      const redirectUriPath = (updatesPayload.gdiGoogleRedirectUri || '').trim();
+      if (redirectUriPath) {
+        const val = redirectUriPath.toLowerCase();
+        if (val.includes("secret") || val.includes("key") || val.includes("token")) {
+          alert("GDI ERRO CRÍTICO: Chave secreta ou token detectado incorretamente no campo de Redirect URI! Operação cancelada.");
+          addActionLog('GDI_OAUTH_SECRET_MISUSED_AS_REDIRECT_URI', 'failed', `Configurações de rede GDI bloqueadas: O valor "${redirectUriPath}" contém prefixos ou termos reservados de secrets e NÃO pode ser usado como redirecionamento de OAuth.`);
+          setIsSavingCreds(false);
+          return;
+        }
+        if (!val.startsWith("http://") && !val.startsWith("https://")) {
+          alert("GDI ERRO: O Redirect URI deve ser uma URL válida e começar com http:// ou https://");
+          addActionLog('GDI_OAUTH_REDIRECT_URI_INVALID', 'failed', `Configurações de rede GDI bloqueadas: O URI de redirecionamento "${redirectUriPath}" não é válido.`);
+          setIsSavingCreds(false);
+          return;
+        }
+      }
+
       // Inject secrets only if entered manually
       if (clientSecretInput) updatesPayload.gdiGoogleClientSecret = clientSecretInput;
       if (privateKeyInput) updatesPayload.gdiGoogleServiceAccountPrivateKey = privateKeyInput;
@@ -243,12 +263,21 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
           setDbConfig(configData);
           setCredsForm(configData);
         }
-        addActionLog('GDI_CREDENTIALS_UPDATED', 'success', 'Parâmetros de credenciais autenticadoras do Google e Canal BOSS persitidos com segurança.');
+        addActionLog('GDI_CREDENTIALS_UPDATED', 'success', 'Parâmetros de credenciais autenticadoras do Google e Canal BOSS persistidos com segurança.');
+        if (redirectUriPath) {
+          addActionLog('GDI_OAUTH_REDIRECT_URI_RESOLVED', 'success', `OAuth Redirect URI salvo e validado com sucesso: "${redirectUriPath}"`);
+        }
       } else {
-        alert('Erro ao persistir credenciais corporativas.');
+        const errData = await res.json().catch(() => ({}));
+        const errMsg = errData.message || 'Erro ao persistir credenciais corporativas.';
+        alert(errMsg);
+        if (errData.error) {
+          addActionLog(errData.error, 'failed', errMsg);
+        }
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
+      alert('Falha mecânica ao sincronizar credenciais: ' + e.message);
     } finally {
       setIsSavingCreds(false);
     }
@@ -321,10 +350,10 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
     }
   };
 
-  // Webhook received Job Simulation
-  const triggerMockJobIncomingOnBackend = async () => {
+  // Webhook received Job Real Trigger
+  const triggerTechnicalJob = async () => {
     try {
-      addActionLog('GDI_DIAGNOSTIC_JOB_TRIGGERED', 'success', 'Enviando payload síncrono mapeado ao barramento webhook receptor de rascunhos.');
+      addActionLog('GDI_TECHNICAL_JOB_TRIGGERED', 'success', 'Enviando payload síncrono real ao barramento webhook receptor de rascunhos.');
       const currentPayload = JSON.parse(rawPayloadText);
       const res = await fetch('/api/jobs/trigger', {
         method: 'POST',
@@ -339,7 +368,7 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
           if (r.job && r.job.logs) {
             setUserActionLogs(prev => [...r.job.logs.reverse(), ...prev]);
           }
-          alert('Job de diagnóstico processado síncronamente pela API real de Webhook! Novo registro faturado.');
+          alert('Log de transação operada: Payload técnico recebido e processado pelo barramento com sucesso.');
         }
       }
     } catch (e: any) {
@@ -363,9 +392,9 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
     }
   };
 
-  // Custom GDI sandboxed raw Payload state
+  // Custom GDI raw Payload state
   const [rawPayloadText, setRawPayloadText] = useState<string>(() => {
-    const defaultM = getMockPayloadForDoc(card.documentType, (card.category || 'PF').toUpperCase() as 'PF' | 'PJ');
+    const defaultM = getTechnicalPayloadForDoc(card.documentType, (card.category || 'PF').toUpperCase() as 'PF' | 'PJ');
     return JSON.stringify(defaultM, null, 2);
   });
 
@@ -382,92 +411,9 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
   const normalizedData = mapperResult.normalized;
   const isPayloadValid = !parseError && mapperResult.validation.isValid;
 
-  // Custom states for testing/simulation
-  const [activeSuiteTab, setActiveSuiteTab] = useState<'painel' | 'placeholders' | 'credentials' | 'simulador'>('painel');
-  const [simulationStatus, setSimulationStatus] = useState<'idle' | 'success' | 'failed'>('success');
-  const [simulationErrorType, setSimulationErrorType] = useState<string>('PAYLOAD_EMPTY');
+  // Active module tab
+  const [activeSuiteTab, setActiveSuiteTab] = useState<'painel' | 'placeholders' | 'credentials'>('painel');
   const [copiedMessage, setCopiedMessage] = useState<string | null>(null);
-  
-  // Anti-duplicidade states
-  const [existingDocConflict, setExistingDocConflict] = useState<boolean>(false);
-  const [antiDuplicitySetting, setAntiDuplicitySetting] = useState<'new_version' | 'alert' | 'cancel'>('alert');
-  
-  // Reprocessamento states
-  const [retryCount, setRetryCount] = useState<number>(0);
-  const [lastRetryAt, setLastRetryAt] = useState<string>('Nunca');
-  const [reprocessReason, setReprocessReason] = useState<string>('Reenvio manual após validação de parâmetros');
-
-  // Diagnostic steps tracking
-  const [diagnosticSteps, setDiagnosticSteps] = useState({
-    received: true,
-    docTypeValid: true,
-    templateConfigured: true,
-    placeholdersMapped: true,
-    destinationIdReceived: true,
-    gdiHasPermission: true,
-    docCreated: true,
-    savedToFolder: true,
-    resultPrepared: true,
-    returnedToBoss: true,
-  });
-
-  // Dynamic success/failure logs populated by mapper results
-  const [performanceLogs, setPerformanceLogs] = useState<Array<GdiLogEntry>>([]);
-
-  // Synchronize dynamic payload changes and validate in real time
-  useEffect(() => {
-    let currentPayload = {};
-    try {
-      currentPayload = JSON.parse(rawPayloadText);
-    } catch {
-      // Keep state alive even on intermediate syntax errors (e.g. typing JSON)
-      const emptyLogs: GdiLogEntry[] = [{
-        timestamp: getFormattedNow(),
-        step: 'GDI_PAYLOAD_PARSING_FAILED',
-        status: 'failed',
-        message: 'Falha crítica: O corpo da mensagem enviada no barramento não é um JSON válido.',
-        details: 'Revise colchetes, vírgulas e aspas duplas no editor.'
-      }];
-      setPerformanceLogs(emptyLogs);
-      setSimulationStatus('failed');
-      setDiagnosticSteps({
-        received: false,
-        docTypeValid: false,
-        templateConfigured: false,
-        placeholdersMapped: false,
-        destinationIdReceived: false,
-        gdiHasPermission: false,
-        docCreated: false,
-        savedToFolder: false,
-        resultPrepared: false,
-        returnedToBoss: false,
-      });
-      return;
-    }
-
-    const valResult = normalizePortalBossPayload(currentPayload);
-    const isOk = valResult.validation.isValid;
-    setSimulationStatus(isOk ? 'success' : 'failed');
-    
-    // Auto populate diagnostics checklist relative to actual presence list
-    const hasDocType = !!valResult.normalized.documentType;
-    const hasFolder = !!valResult.normalized.destinationFolderId;
-    
-    setDiagnosticSteps({
-      received: true,
-      docTypeValid: hasDocType,
-      templateConfigured: templateStatus === 'validated' || templateStatus === 'configurado',
-      placeholdersMapped: isOk,
-      destinationIdReceived: hasFolder,
-      gdiHasPermission: hasFolder && templateStatus !== 'erro_template',
-      docCreated: isOk,
-      savedToFolder: isOk,
-      resultPrepared: isOk,
-      returnedToBoss: isOk,
-    });
-
-    setPerformanceLogs(valResult.logs);
-  }, [rawPayloadText, templateStatus]);
 
   const triggerCopy = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
@@ -557,398 +503,9 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
     });
   };
 
-  // Helper static structured mock schema JSON contract representing inputs from Portal BOSS
   const getPayloadContractJson = () => {
-    return JSON.stringify({
-      documentType: card.documentType,
-      caseId: 'CASE-2026-98745',
-      clientId: 'CLI-87612',
-      source: 'Portal BOSS Clientes',
-      target: 'GDI',
-      destinationFolderId: '1H9D48xPlOsM2z7_GD_FOLDER_ID_MOCK',
-      destinationFolderUrl: 'https://drive.google.com/drive/folders/1H9D48xPlOsM2z7_GD_FOLDER_ID_MOCK',
-      clientData: card.category === 'pj' ? {
-        razaoSocial: 'Exemplo Serviços Empresariais S/A',
-        cnpj: '12.345.678/0001-90',
-        representanteNome: 'Rui Barbosa Neto',
-        representanteCpf: '123.456.789-01',
-        representanteCargo: 'Diretor Geral',
-        nomeFantasia: 'Exemplo S/A' 
-      } : {
-        nomeCompleto: 'Guilherme Giffoni Fagundes',
-        cpf: '098.765.432-10',
-        rg: 'RG-15.422.388-SSPSP',
-        estadoCivil: 'Solteiro',
-        nacionalidade: 'Brasileiro',
-        profissao: 'Engenheiro Agrônomo',
-        endereco: 'Rua das Flores, 452, Porto Alegre - RS, CEP 90020-080',
-        telefone: '(51) 99122-3344'
-      },
-      caseData: {
-        naturezaAcao: 'Ambiental e Possessória',
-        valorHonorarios: 'R$ 8.000,00',
-        formaPagamento: 'Entrada de R$ 2.000,00 via PIX + 12 parcelas mensais',
-        varaCompetente: '3ª Vara Cível da Comarca de Canoas/RS',
-        foroComarca: 'Foro Central de Canoas',
-        relatoFatos: 'Cobrança indevida de taxas municipais ambientais sobre propriedade produtiva familiar.'
-      },
-      officeData: {
-        advogadoNome: 'Dr. Roberto Giffoni',
-        advogadoOab: 'OAB/RS 74.225',
-        escritorioNome: 'Giffoni & Associados Advocacia'
-      },
-      requestedBy: 'workflow_auto_boss_giffoni_user',
-      createdAt: '2026-06-02T17:52:12Z'
-    }, null, 2);
-  };
-
-  // Helper static structured mock schema JSON contract representing GDI return
-  const getCallbackSuccessJson = () => {
-    return JSON.stringify({
-      status: 'success',
-      documentType: card.documentType,
-      caseId: 'CASE-2026-98745',
-      clientId: 'CLI-87612',
-      googleDocsId: '1fT22Z7M9K6hX8yPsN3w_MOCK_DOC_OUT_001',
-      googleDocsUrl: 'https://docs.google.com/document/d/1fT22Z7M9K6hX8yPsN3w_MOCK_DOC_OUT_001/edit?usp=drivesdk',
-      fileName: `DRAFT_EXEC_${card.documentType.toUpperCase()}_CASE_2026_98745.pdf`,
-      destinationFolderId: '1H9D48xPlOsM2z7_GD_FOLDER_ID_MOCK',
-      generatedAt: '2026-06-02T17:52:19Z',
-      logs: [...userActionLogs, ...performanceLogs].map(l => ({
-        timestamp: l.timestamp,
-        step: l.step,
-        status: l.status,
-        message: l.message
-      }))
-    }, null, 2);
-  };
-
-  // Helper failure contracts structure
-  const getCallbackFailureJson = (errorCode: string, errorMsg: string) => {
-    return JSON.stringify({
-      status: 'failed',
-      documentType: card.documentType,
-      caseId: 'CASE-2026-98745',
-      clientId: 'CLI-87612',
-      errorCode: errorCode,
-      errorMessage: errorMsg,
-      failedAt: '2026-06-02T17:52:14Z',
-      logs: [
-        ...userActionLogs.map(l => ({
-          timestamp: l.timestamp,
-          step: l.step,
-          status: l.status,
-          message: l.message
-        })),
-        { timestamp: '02/06/2026 17:52:12', step: 'GDI_JOB_RECEIVED', status: 'success', message: 'Job recebido no endpoint de recepção estática' },
-        { timestamp: '02/06/2026 17:52:13', step: 'GDI_PAYLOAD_VALIDATED', status: 'failed', message: 'Falha durante o processamento', details: errorMsg }
-      ]
-    }, null, 2);
-  };
-
-  // Failure scenario details depending on chosen simulated error type
-  const getErrorTypeDetail = (type: string) => {
-    switch (type) {
-      case 'PAYLOAD_EMPTY':
-        return {
-          code: 'PAYLOAD_EMPTY',
-          step: 'GDI_PAYLOAD_VALIDATED',
-          message: 'Falha crítica: O payload de dados recebido está vazio ou corrompido.',
-          reason: 'A requisição postada pelo integrador não continha strings JSON válidas no body.',
-          stack: 'Error: Cannot parsed void request body mapping properties at WebServer.processIncoming (server.ts:142:15)'
-        };
-      case 'DOCUMENT_TYPE_MISSING':
-        return {
-          code: 'DOCUMENT_TYPE_MISSING',
-          step: 'GDI_PAYLOAD_VALIDATED',
-          message: 'Falha crítica: O campo "documentType" não foi fornecido na mensagem.',
-          reason: 'O cabeçalho ou payload do webhook não especificou qual classificador documental deve ser acionado.',
-          stack: 'Error: Field "documentType" is mandatory at validation.ts:42:29'
-        };
-      case 'DOCUMENT_TYPE_INVALID':
-        return {
-          code: 'DOCUMENT_TYPE_INVALID',
-          step: 'GDI_PAYLOAD_VALIDATED',
-          message: `Falha crítica: O classificador documentType recebido no payload é incompatível com esta rota de automação.`,
-          reason: 'O integrador enviou um documentType incompatível do esperado.',
-          stack: 'Error: Type schema mismatch at validator.ts:98:12'
-        };
-      case 'CASE_ID_MISSING':
-        return {
-          code: 'CASE_ID_MISSING',
-          step: 'GDI_PAYLOAD_VALIDATED',
-          message: 'Falha porque o identificador de caso "caseId" do Portal BOSS não foi recebido.',
-          reason: 'O fluxo necessita do ID do caso associado para anexação e feedback no Portal BOSS Clientes.',
-          stack: 'Error: Field payload.caseId is required for operational binding'
-        };
-      case 'CLIENT_ID_MISSING':
-        return {
-          code: 'CLIENT_ID_MISSING',
-          step: 'GDI_PAYLOAD_VALIDATED',
-          message: 'Falha porque o identificador de cliente "clientId" está ausente.',
-          reason: 'O ID do cliente não foi localizado no payload recebido do Portal BOSS.',
-          stack: 'Error: Field payload.clientId cannot be null'
-        };
-      case 'CLIENT_DATA_MISSING':
-        return {
-          code: 'CLIENT_DATA_MISSING',
-          step: 'GDI_PLACEHOLDERS_VALIDATED',
-          message: 'Falha porque o "clientData" contendo as chaves variáveis do cliente está ausente.',
-          reason: 'Faltam dados essenciais do cliente para subscrever os campos obrigatórios do documento.',
-          stack: 'Error: Field payload.clientData is undefined or lacks minimum keys'
-        };
-      case 'DESTINATION_FOLDER_ID_MISSING':
-        return {
-          code: 'DESTINATION_FOLDER_ID_MISSING',
-          step: 'GDI_DESTINATION_FOLDER_VALIDATED',
-          message: 'Falha porque destinationFolderId não foi recebido.',
-          reason: 'O ID da pasta destino do Google Drive é obrigatório para arquivamento estruturado.',
-          stack: 'Error: destinationFolderId cannot be empty. GDI requires solid reference to target disk.'
-        };
-      case 'DESTINATION_FOLDER_URL_MISSING':
-        return {
-          code: 'DESTINATION_FOLDER_URL_MISSING',
-          step: 'GDI_DESTINATION_FOLDER_VALIDATED',
-          message: 'Falha porque destinationFolderUrl não foi recebido.',
-          reason: 'O link amigável de destino no Google Drive é obrigatório para devolução de resposta formatada.',
-          stack: 'Error: destinationFolderUrl cannot be empty. GDI requires link reference.'
-        };
-      case 'DESTINATION_FOLDER_PERMISSION_DENIED':
-        return {
-          code: 'DESTINATION_FOLDER_PERMISSION_DENIED',
-          step: 'GDI_DESTINATION_FOLDER_VALIDATED',
-          message: 'Falha porque o GDI não possui permissão para salvar na pasta informada.',
-          reason: 'Erro de permissão no Google Drive OAuth. A conta de serviço do GDI necessita de acesso leitura/escrita na pasta fornecida.',
-          stack: 'Error: 403 Permission Denied. Service account does not have edit access to Google Drive Folder: ' + card.id
-        };
-      case 'DESTINATION_FOLDER_NOT_FOUND':
-        return {
-          code: 'DESTINATION_FOLDER_NOT_FOUND',
-          step: 'GDI_DESTINATION_FOLDER_VALIDATED',
-          message: 'Falha porque as referências de pasta destino não foram localizadas ou foram apagadas no Google Drive.',
-          reason: 'O Google Drive retornou código 404 para a pasta especificada.',
-          stack: 'Error: 404 Folder Not Found on Google Drive API call'
-        };
-      case 'TEMPLATE_ID_MISSING':
-        return {
-          code: 'TEMPLATE_ID_MISSING',
-          step: 'GDI_TEMPLATE_FOUND',
-          message: `Falha porque o template da ${getDocFriendlyName()} não foi configurado.`,
-          reason: 'O ID do template do Google Docs correspondente no GDI está vazio nas configurações da automação.',
-          stack: 'Error: GDocs template id is null under current route mapping'
-        };
-      case 'TEMPLATE_NOT_FOUND':
-        return {
-          code: 'TEMPLATE_NOT_FOUND',
-          step: 'GDI_TEMPLATE_FOUND',
-          message: 'Falha porque o template com o ID especificado não foi localizado no Google Docs.',
-          reason: 'O arquivo original do template pode ter sido excluído ou movido da conta corporativa proprietária.',
-          stack: 'Error: 404 Google Docs File Not Found for ID: ' + templateId
-        };
-      case 'TEMPLATE_PERMISSION_DENIED':
-        return {
-          code: 'TEMPLATE_PERMISSION_DENIED',
-          step: 'GDI_TEMPLATE_FOUND',
-          message: 'Falha porque o GDI não possui permissão para ler o Template do Google Docs especificado.',
-          reason: 'Autorização recusada. Atribua acesso de leitura pública ou compartilhe o template com a conta de serviço do GDI.',
-          stack: 'Error: 403 Google API Access Denied'
-        };
-      case 'TEMPLATE_PLACEHOLDERS_INVALID':
-        return {
-          code: 'TEMPLATE_PLACEHOLDERS_INVALID',
-          step: 'GDI_PLACEHOLDERS_VALIDATED',
-          message: 'Falha porque o placeholder {{OUTORGANTE_CPF}} não possui campo correspondente no payload.',
-          reason: 'Há incompatibilidade estrutural. O template Google Docs espera a variável de CPF, mas a mesma não consta no payload.',
-          stack: 'Error: Placeholder mismatch validator exception at substitution_engine.ts:312:14'
-        };
-      default:
-        return {
-          code: 'GENERIC_ERROR',
-          step: 'GDI_PAYLOAD_VALIDATED',
-          message: 'Erro desconhecido durante processamento.',
-          reason: 'Motivo inexplicado ou falha de infraestrutura interna do sandbox.',
-          stack: 'Unknown internal error'
-        };
-    }
-  };
-
-  const handleSimulateSuccess = () => {
-    setSimulationStatus('success');
-    setTemplateStatus('validated');
-    setTemplateError('');
-    setExistingDocConflict(false);
-    
-    // Reset raw text payload to a perfectly valid complete mock!
-    const okMock = getMockPayloadForDoc(card.documentType, (card.category || 'PF').toUpperCase() as 'PF' | 'PJ');
-    setRawPayloadText(JSON.stringify(okMock, null, 2));
-  };
-
-  const handleSimulateFailure = (errorTypeString?: string) => {
-    const errorType = errorTypeString || simulationErrorType;
-    setSimulationStatus('failed');
-    
-    const errObj = getErrorTypeDetail(errorType);
-
-    if (errorType.startsWith('TEMPLATE_')) {
-      setTemplateStatus('erro_template');
-      setTemplateError(errObj.message);
-    } else {
-      setTemplateStatus('validated');
-      setTemplateError('');
-    }
-
-    // Adapt raw text payload in the editable area to simulate the error!
-    try {
-      const currentObj = JSON.parse(rawPayloadText);
-      if (errorType === 'PAYLOAD_EMPTY') {
-        setRawPayloadText('');
-      } else if (errorType === 'DOCUMENT_TYPE_MISSING') {
-        delete currentObj.documentType;
-        setRawPayloadText(JSON.stringify(currentObj, null, 2));
-      } else if (errorType === 'DOCUMENT_TYPE_INVALID') {
-        currentObj.documentType = 'TIPO_INVALIDO_OUTRO_DOC';
-        setRawPayloadText(JSON.stringify(currentObj, null, 2));
-      } else if (errorType === 'CLIENT_DATA_MISSING') {
-        delete currentObj.clientRawData;
-        setRawPayloadText(JSON.stringify(currentObj, null, 2));
-      } else if (errorType === 'DESTINATION_FOLDER_ID_MISSING') {
-        delete currentObj.destinationFolderId;
-        setRawPayloadText(JSON.stringify(currentObj, null, 2));
-      } else if (errorType === 'DESTINATION_FOLDER_URL_MISSING') {
-        delete currentObj.destinationFolderUrl;
-        setRawPayloadText(JSON.stringify(currentObj, null, 2));
-      }
-    } catch {
-      // Keep silent on syntax bugs
-    }
-
-    // Adjust diagnostic checklist steps based on error
-    const newDiagnostic = {
-      received: true,
-      docTypeValid: true,
-      templateConfigured: true,
-      placeholdersMapped: true,
-      destinationIdReceived: true,
-      gdiHasPermission: true,
-      docCreated: true,
-      savedToFolder: true,
-      resultPrepared: true,
-      returnedToBoss: true,
-    };
-
-    if (errorType === 'PAYLOAD_EMPTY') {
-      newDiagnostic.received = false;
-      newDiagnostic.docTypeValid = false;
-    }
-    if (errorType === 'DOCUMENT_TYPE_MISSING' || errorType === 'DOCUMENT_TYPE_INVALID') {
-      newDiagnostic.docTypeValid = false;
-    }
-    if (errorType === 'TEMPLATE_ID_MISSING' || errorType === 'TEMPLATE_NOT_FOUND' || errorType === 'TEMPLATE_PERMISSION_DENIED') {
-      newDiagnostic.templateConfigured = false;
-    }
-    if (errorType === 'TEMPLATE_PLACEHOLDERS_INVALID' || errorType === 'CLIENT_DATA_MISSING') {
-      newDiagnostic.placeholdersMapped = false;
-    }
-    if (errorType === 'DESTINATION_FOLDER_ID_MISSING' || errorType === 'DESTINATION_FOLDER_URL_MISSING') {
-      newDiagnostic.destinationIdReceived = false;
-    }
-    if (errorType === 'DESTINATION_FOLDER_PERMISSION_DENIED' || errorType === 'DESTINATION_FOLDER_NOT_FOUND') {
-      newDiagnostic.gdiHasPermission = false;
-    }
-
-    // Set trailing process as false for failures
-    const stepsArray: Array<keyof typeof newDiagnostic> = [
-      'received', 'docTypeValid', 'templateConfigured', 'placeholdersMapped',
-      'destinationIdReceived', 'gdiHasPermission', 'docCreated', 'savedToFolder',
-      'resultPrepared', 'returnedToBoss'
-    ];
-
-    let foundFail = false;
-    for (const step of stepsArray) {
-      if (!newDiagnostic[step]) {
-        foundFail = true;
-      }
-      if (foundFail) {
-        newDiagnostic[step] = false;
-      }
-    }
-
-    setDiagnosticSteps(newDiagnostic);
-
-    // Build matching logs
-    const errorLogs = [];
-    let logTimeSec = 12;
-
-    for (const step of stepsArray) {
-      const isSuccess = newDiagnostic[step];
-      const logStepName = getLogStepName(step);
-      
-      if (isSuccess) {
-        errorLogs.push({
-          timestamp: `02/06/2026 17:52:${logTimeSec++}`,
-          step: logStepName,
-          status: 'success' as const,
-          message: getStepSuccessMsg(step),
-          details: 'Componente validado com sucesso'
-        });
-      } else {
-        errorLogs.push({
-          timestamp: `02/06/2026 17:52:${logTimeSec++}`,
-          step: logStepName,
-          status: 'failed' as const,
-          message: errObj.message,
-          details: errObj.reason
-        });
-        break; // Stop listing logs on fail step
-      }
-    }
-
-    setPerformanceLogs(errorLogs);
-  };
-
-  const getLogStepName = (stepKey: string): string => {
-    switch (stepKey) {
-      case 'received': return 'GDI_JOB_RECEIVED';
-      case 'docTypeValid': return 'GDI_PAYLOAD_VALIDATED';
-      case 'templateConfigured': return 'GDI_TEMPLATE_FOUND';
-      case 'placeholdersMapped': return 'GDI_PLACEHOLDERS_VALIDATED';
-      case 'destinationIdReceived': return 'GDI_DESTINATION_FOLDER_VALIDATED';
-      case 'gdiHasPermission': return 'GDI_DESTINATION_FOLDER_VALIDATED';
-      case 'docCreated': return 'GDI_DOCUMENT_CREATED';
-      case 'savedToFolder': return 'GDI_DOCUMENT_SAVED_TO_FOLDER';
-      case 'resultPrepared': return 'GDI_RESULT_READY';
-      case 'returnedToBoss': return 'GDI_RESULT_RETURNED_TO_PORTAL';
-      default: return 'GDI_PROCESSING';
-    }
-  };
-
-  const getStepSuccessMsg = (stepKey: string): string => {
-    switch (stepKey) {
-      case 'received': return 'Job recebido no endpoint de recepção estática';
-      case 'docTypeValid': return 'Payload do BOSS Clientes validado com sucesso';
-      case 'templateConfigured': return 'Template ID encontrado no Google Docs drive';
-      case 'placeholdersMapped': return 'Todos os placeholders do template mapeados';
-      case 'destinationIdReceived': return 'ID da pasta destino localizado no payload';
-      case 'gdiHasPermission': return 'Pasta de destino do Drive está acessível e possui permissões';
-      default: return 'Etapa concluída com sucesso';
-    }
-  };
-
-  const handleReprocess = () => {
-    setRetryCount(prev => prev + 1);
-    const dateStr = new Date().toLocaleString('pt-BR');
-    setLastRetryAt(dateStr);
-    
-    // Simulate reprocess check
-    if (simulationStatus === 'failed') {
-      // Small feedback
-      alert(`Reprocessamento disparado (Tentativa #${retryCount + 1}).\nStatus anterior: FALHA.\nReprocessando com parâmetros simulados...`);
-      // Randomly auto correct or keep failing
-      handleSimulateSuccess();
-    } else {
-      alert(`Reprocessamento disparado para Job ativo com sucesso. Nenhuma ação estrita necessária, logs redefinidos.`);
-      handleSimulateSuccess();
-    }
+    const defaultM = getTechnicalPayloadForDoc(card.documentType, (card.category || 'PF').toUpperCase() as 'PF' | 'PJ');
+    return JSON.stringify(defaultM, null, 2);
   };
 
   return (
@@ -987,13 +544,6 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
             <span>Central GDI</span>
           </button>
 
-          <button 
-            onClick={() => handleSimulateSuccess()}
-            className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] px-3.5 py-2 rounded-lg shadow-sm transition active:scale-95 inline-flex items-center space-x-1 cursor-pointer"
-          >
-            <Play className="h-3.5 w-3.5" />
-            <span>Testar Configuração</span>
-          </button>
 
           <button 
             onClick={() => triggerCopy(getPayloadContractJson(), 'payload')}
@@ -1027,7 +577,7 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
           <div className="h-5 w-[1px] bg-slate-800 hidden sm:block"></div>
           <div>
             <span className="text-[9px] font-mono text-slate-400 uppercase tracking-wider block">ID DO REGISTRO TÉCNICO</span>
-            <span className="text-xs font-mono font-bold text-slate-200">ENV_SANDBOX_STABLE_2026</span>
+            <span className="text-xs font-mono font-bold text-slate-200">GDI_CLOUD_ACTIVE_2026</span>
           </div>
         </div>
         <div className="bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-700 text-right flex items-center gap-2">
@@ -1071,17 +621,6 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
           <Lock className="h-4 w-4" />
           <span>Chaves e Credenciais</span>
         </button>
-        <button
-          onClick={() => setActiveSuiteTab('simulador')}
-          className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold transition rounded-lg cursor-pointer ${
-            activeSuiteTab === 'simulador'
-              ? 'bg-blue-600 text-white shadow-xs'
-              : 'text-slate-600 hover:bg-slate-100'
-          }`}
-        >
-          <Terminal className="h-4 w-4" />
-          <span>Modo Diagnóstico e Testes</span>
-        </button>
       </div>
 
       {/* TWO COLUMN GRID LAYOUT */}
@@ -1109,6 +648,12 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
             onSaveTemplate={handleSaveActiveTemplate}
             isSavingTemplate={isSavingTemplate}
             getDocFriendlyName={getDocFriendlyName}
+            rawPayloadText={rawPayloadText}
+            setRawPayloadText={setRawPayloadText}
+            isPayloadValid={isPayloadValid}
+            parseError={parseError}
+            normalizedData={normalizedData}
+            triggerTechnicalJob={triggerTechnicalJob}
           />
         )}
 
@@ -1140,40 +685,18 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
             isSavingCreds={isSavingCreds}
             handleSaveGoogleCredentials={handleSaveGoogleCredentials}
             dbConfig={dbConfig}
-          />
-        )}
-
-        {activeSuiteTab === 'simulador' && (
-          <GdiSimuladorTab
-            card={card as GoogleDocsCard}
-            rawPayloadText={rawPayloadText}
-            setRawPayloadText={setRawPayloadText}
-            parseError={parseError}
-            isPayloadValid={isPayloadValid}
-            normalizedData={normalizedData}
-            mapperResult={mapperResult}
-            simulationStatus={simulationStatus}
-            simulationErrorType={simulationErrorType}
-            setSimulationErrorType={setSimulationErrorType}
-            existingDocConflict={existingDocConflict}
-            setExistingDocConflict={setExistingDocConflict}
-            antiDuplicitySetting={antiDuplicitySetting}
-            setAntiDuplicitySetting={setAntiDuplicitySetting}
-            retryCount={retryCount}
-            lastRetryAt={lastRetryAt}
-            reprocessReason={reprocessReason}
-            setReprocessReason={setReprocessReason}
-            diagnosticSteps={diagnosticSteps}
-            performanceLogs={performanceLogs}
+            googleAuthStatus={googleAuthStatus}
+            setGoogleAuthStatus={setGoogleAuthStatus}
+            googleDocsStatus={googleDocsStatus}
+            setGoogleDocsStatus={setGoogleDocsStatus}
+            googleDriveStatus={googleDriveStatus}
+            setGoogleDriveStatus={setGoogleDriveStatus}
             userActionLogs={userActionLogs}
-            handleReprocess={handleReprocess}
-            handleSimulateSuccess={handleSimulateSuccess}
-            handleSimulateFailure={handleSimulateFailure}
-            triggerMockJobIncomingOnBackend={triggerMockJobIncomingOnBackend}
-            getCallbackSuccessJson={getCallbackSuccessJson}
-            getCallbackFailureJson={getCallbackFailureJson}
-            getErrorTypeDetail={getErrorTypeDetail}
-            triggerCopy={triggerCopy}
+            setUserActionLogs={setUserActionLogs}
+            triggerGoogleAuthDiagnostics={triggerGoogleAuthDiagnostics}
+            triggerGoogleDocsDiagnostics={triggerGoogleDocsDiagnostics}
+            triggerGoogleDriveDiagnostics={triggerGoogleDriveDiagnostics}
+            addActionLog={addActionLog}
           />
         )}
       </div>

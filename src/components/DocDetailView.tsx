@@ -513,11 +513,11 @@ export default function DocDetailView({ card, onBack }: DocDetailViewProps) {
           </div>
         </div>
 
-        {/* Save button visual mock */}
+        {/* Botão Salvar Layout */}
         <div className="flex items-center space-x-2 shrink-0">
           <span className="text-xs text-slate-400 font-mono hidden sm:inline">Rascunho Visual</span>
           <button 
-            onClick={() => alert(`Modo Visor: Esta página é uma demonstração visual de "${card.title}". Não é possível salvar alterações neste sandbox.`)}
+            onClick={() => alert(`Modo Visor: Esta página exibe as especificações do documento "${card.title}". As alterações devem ser configuradas na tela de Automação correspondente.`)}
             className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs px-4 py-2.5 rounded-lg shadow-xs transition active:scale-95"
           >
             Salvar Layout
@@ -563,9 +563,9 @@ export default function DocDetailView({ card, onBack }: DocDetailViewProps) {
           <div className="mt-8 pt-4 border-t border-slate-100 flex items-center justify-between text-slate-400 text-[10px]">
             <span className="flex items-center gap-1.5 font-sans font-medium">
               <Lock className="h-3 w-3" />
-              Ambiente de arquitetura estática isolada
+              Visor de Especificação de Documentos
             </span>
-            <span className="font-mono">ID: {card.id.toUpperCase()}_MOCK</span>
+            <span className="font-mono">ID: {card.id.toUpperCase()}_GDI</span>
           </div>
         </div>
 

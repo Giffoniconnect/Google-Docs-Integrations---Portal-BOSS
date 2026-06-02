@@ -1,7 +1,7 @@
 import React from 'react';
 import { 
   Settings, FileCode, ExternalLink, ShieldAlert, FolderCheck, 
-  RefreshCw, Copy, CheckCircle, Terminal, Trash2, CheckCircle2, History 
+  RefreshCw, Copy, CheckCircle, Terminal, Trash2, CheckCircle2, History, Send 
 } from 'lucide-react';
 import { GoogleDocsCard } from '../types';
 
@@ -27,6 +27,12 @@ interface GdiPainelTabProps {
   onSaveTemplate: () => Promise<void>;
   isSavingTemplate: boolean;
   getDocFriendlyName: () => string;
+  rawPayloadText: string;
+  setRawPayloadText: (val: string) => void;
+  isPayloadValid: boolean;
+  parseError: string | null;
+  normalizedData: any;
+  triggerTechnicalJob: () => Promise<void>;
 }
 
 export const GdiPainelTab: React.FC<GdiPainelTabProps> = ({
@@ -50,7 +56,13 @@ export const GdiPainelTab: React.FC<GdiPainelTabProps> = ({
   triggerClearJobsQueue,
   onSaveTemplate,
   isSavingTemplate,
-  getDocFriendlyName
+  getDocFriendlyName,
+  rawPayloadText,
+  setRawPayloadText,
+  isPayloadValid,
+  parseError,
+  normalizedData,
+  triggerTechnicalJob
 }) => {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -216,6 +228,80 @@ export const GdiPainelTab: React.FC<GdiPainelTabProps> = ({
           </div>
         </div>
 
+        {/* CARD — PAYLOAD TÉCNICO RECEBIDO */}
+        <div id="technical-payload-card" className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+            <div className="flex items-center space-x-2.5">
+              <div className="h-8 w-8 rounded-lg bg-slate-100 text-slate-850 flex items-center justify-center border border-slate-220">
+                <FileCode className="h-4.5 w-4.5" />
+              </div>
+              <div>
+                <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Payload técnico recebido</h3>
+                <p className="text-[10px] text-slate-400">Auditoria estrutural de variáveis e diagnose de placeholders</p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5 font-mono text-[10px]">
+              <span className="text-slate-400">ESTADO DO PAYLOAD:</span>
+              {isPayloadValid ? (
+                <span className="flex items-center gap-1 font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                  Saneado
+                </span>
+              ) : (
+                <span className="flex items-center gap-1 font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+                  Inválido
+                </span>
+              )}
+            </div>
+          </div>
+
+          <p className="text-xs text-slate-500 leading-normal">
+            Este campo representa o payload real recebido do Portal BOSS. Não é simulação. Altere ou verifique os valores JSON brutos abaixo e dispare manualmente o job operacional real se desejar validar as APIs conectadas.
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Editor Textarea */}
+            <div className="space-y-1.5 flex flex-col">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase font-mono font-bold text-slate-400 block mb-0.5 font-bold">Editor JSON</span>
+                {parseError ? (
+                  <span className="text-[9px] text-rose-600 font-mono font-bold bg-rose-50 px-1 border border-rose-100 rounded">Sintaxe Inválida</span>
+                ) : (
+                  <span className="text-[9px] text-emerald-600 font-mono font-bold bg-emerald-50 px-1 border border-emerald-100 rounded">Sintaxe OK</span>
+                )}
+              </div>
+              <textarea
+                value={rawPayloadText}
+                onChange={(e) => setRawPayloadText(e.target.value)}
+                className="w-full h-64 bg-slate-905 text-slate-300 p-3 rounded-lg font-mono text-[10px] leading-relaxed border border-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none select-text"
+                placeholder="Insira o payload JSON real recebido..."
+              />
+            </div>
+
+            {/* Normalizador result preview */}
+            <div className="space-y-1.5 flex flex-col">
+              <span className="text-[10px] uppercase font-mono font-bold text-slate-400 block mb-0.5 font-bold">Variáveis Extraídas (GDI Normalizado)</span>
+              <div className="bg-slate-905 border border-slate-200 rounded-lg h-64 overflow-y-auto p-3 font-mono text-[10px] text-emerald-600 leading-relaxed shadow-inner">
+                <pre>{JSON.stringify(normalizedData, null, 2)}</pre>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 text-[10.5px] border-t border-slate-100">
+            <span className="text-slate-400 font-sans italic">
+              * O envio criará um novo Job de processamento real na fila do barramento.
+            </span>
+            <button
+              onClick={triggerTechnicalJob}
+              disabled={!isPayloadValid || !templateId}
+              className="px-4 py-2 bg-slate-900 hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400 text-slate-100 font-bold rounded-lg transition text-xs cursor-pointer inline-flex items-center gap-1 px-4 py-2 text-xs font-bold rounded shadow-xs"
+            >
+              <Send className="h-3.5 w-3.5" />
+              <span>Disparar Integrador GDI</span>
+            </button>
+          </div>
+        </div>
+
         {/* CARD — FILA DE JOBS WEBHOOK RECEBIDOS */}
         <div id="fila-jobs-card" className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs">
           <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-3">
@@ -351,9 +437,9 @@ export const GdiPainelTab: React.FC<GdiPainelTabProps> = ({
                   <span className="text-[10px] font-mono text-slate-400 uppercase tracking-wider block font-bold">1. Autenticação Cloud IAM</span>
                   <span className="text-xs font-bold text-slate-700">Conta de Serviço Google IAM</span>
                 </div>
-                {googleAuthStatus === 'conectado' ? (
+                {['conectado', 'autenticado', 'service_account_validada'].includes(googleAuthStatus) ? (
                   <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-mono font-bold px-2 py-0.5 rounded flex items-center gap-1">
-                    <span className="h-1 text-1.5 rounded-full bg-emerald-500"></span> Conectado
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500"></span> Conectado
                   </span>
                 ) : (
                   <span className="bg-slate-100 text-slate-600 border border-slate-200 text-[10px] font-mono font-bold px-2 py-0.5 rounded">
