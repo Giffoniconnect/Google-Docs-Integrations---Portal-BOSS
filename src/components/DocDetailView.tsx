@@ -22,20 +22,16 @@ interface DocDetailViewProps {
   onBack: () => void;
 }
 
-type TabType = 'templates' | 'placeholders' | 'destino' | 'jobs' | 'logs' | 'diagnostico' | 'config-automacao';
+type TabType = 'templates' | 'placeholders' | 'config-automacao';
 
 export default function DocDetailView({ card, onBack }: DocDetailViewProps) {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabType>('templates');
 
   const tabs = [
-    { id: 'templates', label: 'Templates', icon: FileCode },
+    { id: 'templates', label: 'Templates de Impressão', icon: FileCode },
     { id: 'placeholders', label: 'Placeholders', icon: Brackets },
-    { id: 'destino', label: 'Destino', icon: FolderCheck },
-    { id: 'jobs', label: 'Jobs Recebidos', icon: Terminal },
-    { id: 'logs', label: 'Logs', icon: History },
-    { id: 'diagnostico', label: 'Diagnóstico', icon: Settings2 },
-    { id: 'config-automacao', label: 'Configurações', icon: Settings },
+    { id: 'config-automacao', label: 'Configurações da Automação', icon: Settings },
   ];
 
   // Helper mock placeholders to make it look professional
@@ -64,33 +60,74 @@ export default function DocDetailView({ card, onBack }: DocDetailViewProps) {
 
   const renderTabContent = (tabId: TabType) => {
     switch (tabId) {
-      case 'templates':
+      case 'templates': {
+        const isProcuracaoPF = card.id === 'procuracao-pf';
+        const docTitle = isProcuracaoPF ? `Modelo da Procuração PF` : `Modelo de ${card.title}`;
+        const docDesc = isProcuracaoPF ? `Modelo utilizado para geração da Procuração PF.` : `Modelo operacional base utilizado para a automação e geração automática de ${card.title}.`;
+        
+        const googleDocsUrl = isProcuracaoPF 
+          ? 'https://docs.google.com/document/d/16k_n_BTdf8wTCG8CK4T2TyAT93o5qrmZqjbROtrBqzk/edit?tab=t.0'
+          : 'https://docs.google.com/document/d/16k_n_BTdf8wTCG8CK4T2TyAT93o5qrmZqjbROtrBqzk/edit?tab=t.0';
+        const rfsPdfUrl = 'https://drive.google.com/drive/u/0/folders/1fhMk2RMwEM7RlDCEOlKl5CsEjujX5zMJ';
+
         return (
           <div className="space-y-6">
             <div className="border-b border-slate-100 pb-4">
-              <h3 className="text-sm font-bold text-slate-800">Mapeador de Arquivos do Google Docs</h3>
-              <p className="text-xs text-slate-400">Gerencie os arquivos de modelagem que darão origem à {card.title}.</p>
+              <h3 className="text-sm font-bold text-slate-800">Templates de Impressão</h3>
+              <p className="text-xs text-slate-400">Instruções regulamentares de visualização e edição de templates operacionais.</p>
             </div>
-            
-            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/50 p-8 text-center flex flex-col items-center justify-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-400 mb-4">
-                <FileCode className="h-6 w-6 text-blue-600/70" />
+
+            <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+                <div>
+                  <h4 className="text-sm font-bold text-slate-800">{docTitle}</h4>
+                  <p className="text-xs text-slate-500 mt-1">{docDesc}</p>
+                </div>
+                <div className="flex flex-wrap gap-2.5">
+                  <a
+                    href={googleDocsUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg transition shadow-xs inline-flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <span>Abrir modelo Google Docs</span>
+                  </a>
+                  <a
+                    href={rfsPdfUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition border border-slate-250 inline-flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <span>Abrir versão PDF</span>
+                  </a>
+                </div>
               </div>
-              <p className="text-sm font-semibold text-slate-700">Templates de Impressão ({card.category.toUpperCase()})</p>
-              <p className="mt-2 text-xs text-slate-500 max-w-sm">
-                Área reservada para configuração futura.
-              </p>
-              <div className="mt-6 flex gap-2">
-                <button 
-                  onClick={() => alert(`Este é um protótipo visual. A conexão de templates do Google Docs para "${card.title}" está reservada para as próximas etapas.`)}
-                  className="px-4 py-2 text-xs font-semibold rounded-lg bg-blue-50 text-blue-600 border border-blue-100 hover:bg-blue-100 transition active:scale-95"
-                >
-                  Selecionar da Nuvem
-                </button>
+
+              {/* Informative Guidance banner */}
+              <div className="bg-blue-50/50 border border-blue-150 rounded-xl p-4.5 space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="h-2 w-2 rounded-full bg-blue-500 animate-pulse"></span>
+                  <span className="text-[11px] font-bold text-blue-800 uppercase tracking-wider font-mono">Regra de Operação Visual GDI</span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                  <div className="bg-white border border-blue-100 p-3.5 rounded-lg space-y-1">
+                    <span className="font-bold text-slate-800 block">Google Docs = Modelo Operacional</span>
+                    <p className="text-slate-500 text-[11px] leading-relaxed">
+                      O GDI utiliza o Google Docs original editável como template operacional para preenchimento de variáveis e substituição síncrona de placeholders.
+                    </p>
+                  </div>
+                  <div className="bg-white border border-blue-100 p-3.5 rounded-lg space-y-1 opacity-80">
+                    <span className="font-bold text-slate-650 block">PDF = Versão de Referência</span>
+                    <p className="text-slate-500 text-[11px] leading-relaxed">
+                      A versão em PDF serve apenas para conferência visual estática e de referência de design. Não deve ser editada nem usada como fonte direta.
+                    </p>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
         );
+      }
 
       case 'placeholders':
         return (
@@ -124,114 +161,6 @@ export default function DocDetailView({ card, onBack }: DocDetailViewProps) {
                   Área reservada para configuração futura.
                 </p>
               </div>
-            </div>
-          </div>
-        );
-
-      case 'destino':
-        return (
-          <div className="space-y-6">
-            <div className="border-b border-slate-100 pb-4">
-              <h3 className="text-sm font-bold text-slate-800">Pasta Destino no Google Drive</h3>
-              <p className="text-xs text-slate-400">Defina o diretório padrão onde cada {card.title} em PDF será arquivado automaticamente.</p>
-            </div>
-
-            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/50 p-8 text-center flex flex-col items-center justify-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-400 mb-4">
-                <FolderCheck className="h-6 w-6 text-slate-500" />
-              </div>
-              <p className="text-sm font-semibold text-slate-700">Caminho da Pasta de Documentos</p>
-              <p className="mt-2 text-xs text-slate-500 max-w-sm">
-                Área reservada para configuração futura.
-              </p>
-              <div className="mt-6">
-                <button className="px-4 py-2 text-xs font-semibold rounded-lg bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200/50">
-                  Selecionar Pasta no Google Drive
-                </button>
-              </div>
-            </div>
-          </div>
-        );
-
-      case 'logs':
-        return (
-          <div className="space-y-6">
-            <div className="border-b border-slate-100 pb-4">
-              <h3 className="text-sm font-bold text-slate-800">Histórico de Geração e Chamadas</h3>
-              <p className="text-xs text-slate-400">Rastreamento estatístico de todas as execuções deste modelo auxiliar.</p>
-            </div>
-
-            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/50 p-8 text-center flex flex-col items-center justify-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-400 mb-4">
-                <History className="h-6 w-6 text-slate-500" />
-              </div>
-              <p className="text-sm font-semibold text-slate-700">Registros de Execuções</p>
-              <p className="mt-2 text-xs text-slate-500 max-w-sm">
-                Área reservada para configuração futura.
-              </p>
-            </div>
-          </div>
-        );
-
-      case 'jobs':
-        return (
-          <div className="space-y-6">
-            <div className="border-b border-slate-100 pb-4">
-              <h3 className="text-sm font-bold text-slate-800">Jobs Recebidos</h3>
-              <p className="text-xs text-slate-400">Instâncias de requisição enviadas de forma assíncrona pelo Portal BOSS Clientes.</p>
-            </div>
-
-            <div className="space-y-3">
-              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/50 p-6 text-center flex flex-col items-center justify-center">
-                <Terminal className="h-6 w-6 text-blue-500 mb-2" />
-                <p className="text-xs font-semibold text-slate-700">Fila de Recomposição de Lote</p>
-                <p className="text-[11px] text-slate-500 max-w-md mt-1">
-                  Aguardando sinalização de eventos (webhooks) do Portal BOSS. Rota de recebimento estática ativa.
-                </p>
-              </div>
-
-              <div className="border border-slate-200 rounded-xl overflow-hidden bg-white text-xs">
-                <div className="bg-slate-50 p-2.5 font-mono text-[10px] text-slate-400 font-bold border-b border-slate-150 flex justify-between">
-                  <span>ID JOB</span>
-                  <span>DATA</span>
-                  <span>CLIENTE</span>
-                  <span>STATUS</span>
-                </div>
-                <div className="p-3 font-mono text-[11px] text-slate-500 divide-y divide-slate-100 space-y-2">
-                  <div className="flex justify-between items-center py-1">
-                     <span className="text-blue-600 font-bold">#JOB-2026-001</span>
-                     <span>02/06/2026</span>
-                     <span className="text-slate-800 font-semibold">Exemplo S/A</span>
-                     <span className="px-2 py-0.5 rounded bg-blue-50 text-blue-700 text-[9px] font-bold">Aguardando Webhook</span>
-                  </div>
-                  <div className="flex justify-between items-center pt-2">
-                     <span className="text-blue-600 font-bold">#JOB-2026-002</span>
-                     <span>02/06/2026</span>
-                     <span className="text-slate-800 font-semibold">Dr. Giffoni Clientes</span>
-                     <span className="px-2 py-0.5 rounded bg-blue-50 text-blue-700 text-[9px] font-bold">Aguardando Webhook</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        );
-
-      case 'diagnostico':
-        return (
-          <div className="space-y-6">
-            <div className="border-b border-slate-100 pb-4">
-              <h3 className="text-sm font-bold text-slate-800">Diagnóstico da Cloud API</h3>
-              <p className="text-xs text-slate-400">Verifique a integridade de rotas virtuais e segurança dos tokens.</p>
-            </div>
-
-            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/50 p-8 text-center flex flex-col items-center justify-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-400 mb-4">
-                <Settings2 className="h-6 w-6" />
-              </div>
-              <p className="text-sm font-semibold text-slate-700">Verificação de Escopos Virtuais</p>
-              <p className="mt-2 text-xs text-slate-500 max-w-sm">
-                Área reservada para configuração futura.
-              </p>
             </div>
           </div>
         );

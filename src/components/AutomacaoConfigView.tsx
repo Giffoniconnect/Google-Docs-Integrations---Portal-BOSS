@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { 
   ArrowLeft, 
   Settings, 
@@ -20,9 +20,28 @@ import {
   Info,
   ShieldAlert,
   ArrowUpRight,
-  ExternalLink
+  ExternalLink,
+  Database,
+  CheckCircle,
+  Terminal
 } from 'lucide-react';
 import { DocCard } from '../types';
+import {
+  normalizePortalBossPayload,
+  getMockPayloadForDoc,
+  getPlaceholdersForDoc,
+  PF_FIELD_RULES,
+  PJ_FIELD_RULES,
+  SOCIO_FIELD_RULES,
+  BANKING_FIELD_RULES,
+  ACESSO_FIELD_RULES,
+  PF_MANDATORY_FIELDS,
+  PJ_MANDATORY_FIELDS,
+  PortalBossPayload,
+  NormalizedGdiData,
+  GdiLogEntry,
+  getFormattedNow
+} from '../utils/portalBossMapper';
 
 interface AutomacaoConfigViewProps {
   card: DocCard;
@@ -33,9 +52,28 @@ interface AutomacaoConfigViewProps {
 export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToCentral }: AutomacaoConfigViewProps) {
   // States of configuration
   const [templateId, setTemplateId] = useState<string>('1fT22Z7M9K6hX8yPsN3w_MOCK_GDOCS_ID_' + card.id.toUpperCase());
-  const [templateStatus, setTemplateStatus] = useState<'não_configurado' | 'configurado' | 'validado' | 'erro_template'>('validado');
+  const [templateStatus, setTemplateStatus] = useState<'não_configurado' | 'configurado' | 'validado' | 'erro_template'>('validated');
   const [templateError, setTemplateError] = useState<string>('');
   
+  // Custom GDI sandboxed raw Payload state
+  const [rawPayloadText, setRawPayloadText] = useState<string>(() => {
+    const defaultM = getMockPayloadForDoc(card.documentType, (card.category || 'PF').toUpperCase() as 'PF' | 'PJ');
+    return JSON.stringify(defaultM, null, 2);
+  });
+
+  // Dynamic calculated parameters based on Portal BOSS Mapper
+  let parsedPayload: PortalBossPayload = {};
+  let parseError: string | null = null;
+  try {
+    parsedPayload = JSON.parse(rawPayloadText);
+  } catch (err: any) {
+    parseError = err.message;
+  }
+
+  const mapperResult = normalizePortalBossPayload(parsedPayload);
+  const normalizedData = mapperResult.normalized;
+  const isPayloadValid = !parseError && mapperResult.validation.isValid;
+
   // Custom states for testing/simulation
   const [simulationStatus, setSimulationStatus] = useState<'idle' | 'success' | 'failed'>('success');
   const [simulationErrorType, setSimulationErrorType] = useState<string>('PAYLOAD_EMPTY');
@@ -64,25 +102,63 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
     returnedToBoss: true,
   });
 
-  // Dynamic success/failure logs
-  const [performanceLogs, setPerformanceLogs] = useState<Array<{
-    timestamp: string;
-    step: string;
-    status: 'success' | 'failed';
-    message: string;
-    details: string;
-  }>>([
-    { timestamp: '02/06/2026 17:52:12', step: 'GDI_JOB_RECEIVED', status: 'success', message: 'Job recebido no endpoint de recepção estática', details: 'Origem: Portal BOSS Clientes (IP: 198.51.100.42)' },
-    { timestamp: '02/06/2026 17:52:13', step: 'GDI_PAYLOAD_VALIDATED', status: 'success', message: 'Payload do BOSS Clientes validado com sucesso', details: `documentType: "${card.documentType}"` },
-    { timestamp: '02/06/2026 17:52:13', step: 'GDI_TEMPLATE_FOUND', status: 'success', message: 'Template ID encontrado no Google Docs drive', details: `ID: 1fT22Z7M9K6hX8...` },
-    { timestamp: '02/06/2026 17:52:14', step: 'GDI_PLACEHOLDERS_VALIDATED', status: 'success', message: 'Todos os placeholders do template mapeados', details: 'Total de chaves substituídas: 6' },
-    { timestamp: '02/06/2026 17:52:14', step: 'GDI_DESTINATION_FOLDER_VALIDATED', status: 'success', message: 'Pasta de destino do Drive está acessível e possui permissões', details: 'ID: 1H9D48... Autorização: OK' },
-    { timestamp: '02/06/2026 17:52:15', step: 'GDI_DOCUMENT_CREATION_STARTED', status: 'success', message: 'Cópia do template base inicializada', details: 'Google API Connector v2' },
-    { timestamp: '02/06/2026 17:52:17', step: 'GDI_DOCUMENT_CREATED', status: 'success', message: 'Variáveis substituídas e PDF gerado', details: 'Exportação via Google Drive PDF Engine' },
-    { timestamp: '02/06/2026 17:52:18', step: 'GDI_DOCUMENT_SAVED_TO_FOLDER', status: 'success', message: 'Arquivo salvo sob ID e URL designada', details: 'Google Drive File ID: 1eX... / Link gerado' },
-    { timestamp: '02/06/2026 17:52:18', step: 'GDI_RESULT_READY', status: 'success', message: 'Estrutura final de retorno formatada', details: 'Criador: Motor GDI Giffoni' },
-    { timestamp: '02/06/2026 17:52:19', step: 'GDI_RESULT_RETURNED_TO_PORTAL', status: 'success', message: 'Webhook enviado com código de retorno HTTP 200', details: 'Callback URL correspondente atualizada no BOSS' }
-  ]);
+  // Dynamic success/failure logs populated by mapper results
+  const [performanceLogs, setPerformanceLogs] = useState<Array<GdiLogEntry>>([]);
+
+  // Synchronize dynamic payload changes and validate in real time
+  useEffect(() => {
+    let currentPayload = {};
+    try {
+      currentPayload = JSON.parse(rawPayloadText);
+    } catch {
+      // Keep state alive even on intermediate syntax errors (e.g. typing JSON)
+      const emptyLogs: GdiLogEntry[] = [{
+        timestamp: getFormattedNow(),
+        step: 'GDI_PAYLOAD_PARSING_FAILED',
+        status: 'failed',
+        message: 'Falha crítica: O corpo da mensagem enviada no barramento não é um JSON válido.',
+        details: 'Revise colchetes, vírgulas e aspas duplas no editor.'
+      }];
+      setPerformanceLogs(emptyLogs);
+      setSimulationStatus('failed');
+      setDiagnosticSteps({
+        received: false,
+        docTypeValid: false,
+        templateConfigured: false,
+        placeholdersMapped: false,
+        destinationIdReceived: false,
+        gdiHasPermission: false,
+        docCreated: false,
+        savedToFolder: false,
+        resultPrepared: false,
+        returnedToBoss: false,
+      });
+      return;
+    }
+
+    const valResult = normalizePortalBossPayload(currentPayload);
+    const isOk = valResult.validation.isValid;
+    setSimulationStatus(isOk ? 'success' : 'failed');
+    
+    // Auto populate diagnostics checklist relative to actual presence list
+    const hasDocType = !!valResult.normalized.documentType;
+    const hasFolder = !!valResult.normalized.destinationFolderId;
+    
+    setDiagnosticSteps({
+      received: true,
+      docTypeValid: hasDocType,
+      templateConfigured: templateStatus === 'validated' || templateStatus === 'configurado',
+      placeholdersMapped: isOk,
+      destinationIdReceived: hasFolder,
+      gdiHasPermission: hasFolder && templateStatus !== 'erro_template',
+      docCreated: isOk,
+      savedToFolder: isOk,
+      resultPrepared: isOk,
+      returnedToBoss: isOk,
+    });
+
+    setPerformanceLogs(valResult.logs);
+  }, [rawPayloadText, templateStatus]);
 
   const triggerCopy = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
@@ -107,78 +183,69 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
 
   // 4. Placeholders mappings according to current selected card.id
   const getMappedPlaceholders = () => {
-    switch (card.id) {
-      case 'procuracao-pf':
-        return [
-          { placeholder: '{{OUTORGANTE_NOME}}', payloadField: 'payload.clientData.nomeCompleto', mandatory: 'Sim', example: 'Felipe Giffoni Silva', status: 'Validado' },
-          { placeholder: '{{OUTORGANTE_CPF}}', payloadField: 'payload.clientData.cpf', mandatory: 'Sim', example: '123.456.789-00', status: 'Validado' },
-          { placeholder: '{{OUTORGANTE_RG}}', payloadField: 'payload.clientData.rg', mandatory: 'Sim', example: 'MG-12.345.678', status: 'Validado' },
-          { placeholder: '{{OUTORGANTE_ENDERECO}}', payloadField: 'payload.clientData.endereco', mandatory: 'Sim', example: 'Av. Paulista, 100, São Paulo/SP', status: 'Validado' },
-          { placeholder: '{{ADVOGADO_NOME}}', payloadField: 'payload.officeData.advogadoNome', mandatory: 'Sim', example: 'Dr. Roberto Giffoni', status: 'Validado' },
-          { placeholder: '{{ADVOGADO_OAB}}', payloadField: 'payload.officeData.advogadoOab', mandatory: 'Sim', example: 'OAB/SP 456.789', status: 'Validado' },
-        ];
-      case 'procuracao-pj':
-        return [
-          { placeholder: '{{EMPRESA_RAZAO_SOCIAL}}', payloadField: 'payload.clientData.razaoSocial', mandatory: 'Sim', example: 'Lojas Americanas S/A', status: 'Validado' },
-          { placeholder: '{{EMPRESA_CNPJ}}', payloadField: 'payload.clientData.cnpj', mandatory: 'Sim', example: '12.345.678/0001-99', status: 'Validado' },
-          { placeholder: '{{REPRESENTANTE_NOME}}', payloadField: 'payload.clientData.representanteNome', mandatory: 'Sim', example: 'Carlos Henrique Lins', status: 'Validado' },
-          { placeholder: '{{REPRESENTANTE_CPF}}', payloadField: 'payload.clientData.representanteCpf', mandatory: 'Sim', example: '987.654.321-11', status: 'Validado' },
-          { placeholder: '{{ADVOGADO_NOME}}', payloadField: 'payload.officeData.advogadoNome', mandatory: 'Sim', example: 'Dr. Roberto Giffoni', status: 'Validado' },
-          { placeholder: '{{ADVOGADO_OAB}}', payloadField: 'payload.officeData.advogadoOab', mandatory: 'Sim', example: 'OAB/SP 456.789', status: 'Validado' },
-        ];
-      case 'declaracao-pobreza-pf':
-        return [
-          { placeholder: '{{DECLARANTE_NOME}}', payloadField: 'payload.clientData.nomeCompleto', mandatory: 'Sim', example: 'Mariana de Souza Albuquerque', status: 'Validado' },
-          { placeholder: '{{DECLARANTE_CPF}}', payloadField: 'payload.clientData.cpf', mandatory: 'Sim', example: '444.555.666-77', status: 'Validado' },
-          { placeholder: '{{DECLARANTE_RG}}', payloadField: 'payload.clientData.rg', mandatory: 'Sim', example: '33.222.111-X', status: 'Validado' },
-          { placeholder: '{{DECLARANTE_PROFISSAO}}', payloadField: 'payload.clientData.profissao', mandatory: 'Não', example: 'Auxiliar de Serviços Gerais', status: 'Validado' },
-          { placeholder: '{{REPRESENTACAO_VARA}}', payloadField: 'payload.caseData.varaCompetente', mandatory: 'Sim', example: '2ª Vara do Trabalho de Canoas/RS', status: 'Validado' },
-        ];
-      case 'declaracao-pobreza-pj':
-        return [
-          { placeholder: '{{EMPRESA_RAZAO_SOCIAL}}', payloadField: 'payload.clientData.razaoSocial', mandatory: 'Sim', example: 'Micro Embalagens Ltda', status: 'Validado' },
-          { placeholder: '{{EMPRESA_CNPJ}}', payloadField: 'payload.clientData.cnpj', mandatory: 'Sim', example: '99.888.777/0001-22', status: 'Validado' },
-          { placeholder: '{{REPRESENTANTE_NOME}}', payloadField: 'payload.clientData.representanteNome', mandatory: 'Sim', example: 'Alberto Pasqualini', status: 'Validado' },
-          { placeholder: '{{REPRESENTANTE_CPF}}', payloadField: 'payload.clientData.representanteCpf', mandatory: 'Sim', example: '055.444.333-22', status: 'Validado' },
-          { placeholder: '{{REPRESENTACAO_VARA}}', payloadField: 'payload.caseData.varaCompetente', mandatory: 'Sim', example: '1ª Vara Cível da Comarca de Pelotas', status: 'Validado' },
-        ];
-      case 'contrato-honorarios-pf':
-        return [
-          { placeholder: '{{CONTRATANTE_NOME}}', payloadField: 'payload.clientData.nomeCompleto', mandatory: 'Sim', example: 'Ricardo Alves Ferreira', status: 'Validado' },
-          { placeholder: '{{CONTRATANTE_CPF}}', payloadField: 'payload.clientData.cpf', mandatory: 'Sim', example: '111.222.333-44', status: 'Validado' },
-          { placeholder: '{{VALOR_HONORARIOS}}', payloadField: 'payload.caseData.valorHonorarios', mandatory: 'Sim', example: 'R$ 4.500,00', status: 'Validado' },
-          { placeholder: '{{FORMA_PAGAMENTO}}', payloadField: 'payload.caseData.formaPagamento', mandatory: 'Sim', example: '3 parcelas mensais de R$ 1.500,00 via PIX', status: 'Validado' },
-          { placeholder: '{{VARA_COMPETENTE}}', payloadField: 'payload.caseData.varaCompetente', mandatory: 'Sim', example: 'Vara de Família e Sucessões', status: 'Validado' },
-        ];
-      case 'contrato-honorarios-pj':
-        return [
-          { placeholder: '{{EMPRESA_CONTRATANTE}}', payloadField: 'payload.clientData.razaoSocial', mandatory: 'Sim', example: 'Tecnologia Avançada S/A', status: 'Validado' },
-          { placeholder: '{{EMPRESA_CNPJ}}', payloadField: 'payload.clientData.cnpj', mandatory: 'Sim', example: '00.111.222/0001-33', status: 'Validado' },
-          { placeholder: '{{VALOR_HONORARIOS}}', payloadField: 'payload.caseData.valorHonorarios', mandatory: 'Sim', example: 'R$ 15.000,00 global', status: 'Validado' },
-          { placeholder: '{{FORMA_PAGAMENTO}}', payloadField: 'payload.caseData.formaPagamento', mandatory: 'Sim', example: 'Entrada de 30% e saldo em 10 dias após ajuizamento', status: 'Validado' },
-          { placeholder: '{{FORO_COMARCA}}', payloadField: 'payload.caseData.foroComarca', mandatory: 'Sim', example: 'Juízo de Porto Alegre/RS', status: 'Validado' },
-        ];
-      case 'primeiro-atendimento-pf':
-        return [
-          { placeholder: '{{CLIENTE_NOME}}', payloadField: 'payload.clientData.nomeCompleto', mandatory: 'Sim', example: 'Beatriz Vasconcelos de Oliveira', status: 'Validado' },
-          { placeholder: '{{CLIENTE_TELEFONE}}', payloadField: 'payload.clientData.telefone', mandatory: 'Sim', example: '(51) 98765-4321', status: 'Validado' },
-          { placeholder: '{{RELATO_FATOS}}', payloadField: 'payload.caseData.relatoFatos', mandatory: 'Sim', example: 'Demissão imotivada grávida', status: 'Validado' },
-          { placeholder: '{{VALOR_CAUSA_ESTIMADO}}', payloadField: 'payload.caseData.valorCausa', mandatory: 'Não', example: 'R$ 32.500,00', status: 'Validado' },
-          { placeholder: '{{DATA_ATENDIMENTO}}', payloadField: 'payload.createdAt', mandatory: 'Sim', example: '02/06/2026', status: 'Validado' },
-        ];
-      case 'primeiro-atendimento-pj':
-        return [
-          { placeholder: '{{REPRESENTANTE_NOME}}', payloadField: 'payload.clientData.representanteNome', mandatory: 'Sim', example: 'Fabiano Albuquerque', status: 'Validado' },
-          { placeholder: '{{EMPRESA_NOME_FANTASIA}}', payloadField: 'payload.clientData.nomeFantasia', mandatory: 'Sim', example: 'Alfa Distribuidora', status: 'Validado' },
-          { placeholder: '{{EMPRESA_CNPJ}}', payloadField: 'payload.clientData.cnpj', mandatory: 'Sim', example: '88.777.666/0001-55', status: 'Validado' },
-          { placeholder: '{{HISTORICO_PJ}}', payloadField: 'payload.caseData.relatoFatos', mandatory: 'Sim', example: 'Ações revisionais de contrato de locação em massa', status: 'Validado' },
-          { placeholder: '{{VALOR_CONTRATO_PJ}}', payloadField: 'payload.caseData.valorEstimado', mandatory: 'Não', example: 'R$ 80.000,00', status: 'Validado' },
-        ];
-      default:
-        return [
-          { placeholder: '{{CLIENTE_NOME}}', payloadField: 'payload.clientData.nomeCompleto', mandatory: 'Sim', example: 'Pessoa Prova', status: 'Validado' }
-        ];
-    }
+    const currentPlaceholders = getPlaceholdersForDoc(card.documentType, normalizedData);
+    return Object.entries(currentPlaceholders).map(([key, val]) => {
+      let pathStr = 'payload.clientRawData';
+      let isMandatory = 'Não';
+      
+      const isPF = card.category.toUpperCase() === 'PF';
+      if (isPF) {
+        // Find matching field rule
+        const rule = PF_FIELD_RULES.find(r => r.key === key.toLowerCase().replace('{{outorgante_', 'pf_').replace('}}', ''));
+        if (rule) {
+          pathStr = `payload.clientRawData.pfData.${rule.key}`;
+          if (PF_MANDATORY_FIELDS.includes(rule.key)) {
+            isMandatory = 'Sim';
+          }
+        } else {
+          // Check falling fallback declarante
+          const declRule = PF_FIELD_RULES.find(r => r.key === key.toLowerCase().replace('{{declarante_', 'pf_').replace('}}', ''));
+          if (declRule) {
+            pathStr = `payload.clientRawData.pfData.${declRule.key}`;
+            if (PF_MANDATORY_FIELDS.includes(declRule.key)) {
+              isMandatory = 'Sim';
+            }
+          }
+        }
+      } else {
+        // PJ rules
+        const pjRule = PJ_FIELD_RULES.find(r => r.key === key.toLowerCase().replace('{{empresa_', 'pj_').replace('}}', ''));
+        const socioRule = SOCIO_FIELD_RULES.find(r => r.key === key.toLowerCase().replace('{{representante_', 'socio_').replace('}}', ''));
+        if (pjRule) {
+          pathStr = `payload.clientRawData.pjDadosEmpresa.${pjRule.key}`;
+          if (PJ_MANDATORY_FIELDS.includes(pjRule.key)) {
+            isMandatory = 'Sim';
+          }
+        } else if (socioRule) {
+          pathStr = `payload.clientRawData.socioDadosPessoais.${socioRule.key}`;
+          if (PJ_MANDATORY_FIELDS.includes(socioRule.key)) {
+            isMandatory = 'Sim';
+          }
+        }
+      }
+
+      // Office checks
+      if (key === '{{LOCAL_ASSINATURA}}' || key === '{{DATA_ASSINATURA}}' || key === '{{ADVOGADO_NOME}}' || key === '{{ADVOGADO_OAB}}') {
+        pathStr = `payload.officeData.${key.toLowerCase().replace('{{', '').replace('}}', '').replace('advogado_', 'advogado')}`;
+        isMandatory = 'Sim';
+      }
+
+      // Case checks
+      if (key === '{{NATUREZA_ACAO}}' || key === '{{VALOR_HONORARIOS}}' || key === '{{FORMA_PAGAMENTO}}' || key === '{{VARA_COMPETENTE}}' || key === '{{FORO_COMARCA}}' || key === '{{RELATO_FATOS}}' || key === '{{VALOR_CAUSA_ESTIMADO}}') {
+        pathStr = `payload.caseData.${key.toLowerCase().replace('{{', '').replace('}}', '').replace('_estimado', '')}`;
+        if (key !== '{{VALOR_CAUSA_ESTIMADO}}') {
+          isMandatory = 'Sim';
+        }
+      }
+
+      return {
+        placeholder: key,
+        payloadField: pathStr,
+        mandatory: isMandatory,
+        example: val || '(vazio)',
+        status: val ? 'Localizado' : 'Não Informado'
+      };
+    });
   };
 
   // Helper static structured mock schema JSON contract representing inputs from Portal BOSS
@@ -323,6 +390,14 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
           reason: 'O ID da pasta destino do Google Drive é obrigatório para arquivamento estruturado.',
           stack: 'Error: destinationFolderId cannot be empty. GDI requires solid reference to target disk.'
         };
+      case 'DESTINATION_FOLDER_URL_MISSING':
+        return {
+          code: 'DESTINATION_FOLDER_URL_MISSING',
+          step: 'GDI_DESTINATION_FOLDER_VALIDATED',
+          message: 'Falha porque destinationFolderUrl não foi recebido.',
+          reason: 'O link amigável de destino no Google Drive é obrigatório para devolução de resposta formatada.',
+          stack: 'Error: destinationFolderUrl cannot be empty. GDI requires link reference.'
+        };
       case 'DESTINATION_FOLDER_PERMISSION_DENIED':
         return {
           code: 'DESTINATION_FOLDER_PERMISSION_DENIED',
@@ -388,33 +463,9 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
     setTemplateError('');
     setExistingDocConflict(false);
     
-    // Set diagnostic checks to true
-    setDiagnosticSteps({
-      received: true,
-      docTypeValid: true,
-      templateConfigured: true,
-      placeholdersMapped: true,
-      destinationIdReceived: true,
-      gdiHasPermission: true,
-      docCreated: true,
-      savedToFolder: true,
-      resultPrepared: true,
-      returnedToBoss: true,
-    });
-
-    // Populate success logs
-    setPerformanceLogs([
-      { timestamp: '02/06/2026 17:52:12', step: 'GDI_JOB_RECEIVED', status: 'success', message: 'Job recebido no endpoint de recepção estática', details: 'Origem: Portal BOSS Clientes (IP: 198.51.100.42)' },
-      { timestamp: '02/06/2026 17:52:13', step: 'GDI_PAYLOAD_VALIDATED', status: 'success', message: 'Payload do BOSS Clientes validado com sucesso', details: `documentType: "${card.documentType}"` },
-      { timestamp: '02/06/2026 17:52:13', step: 'GDI_TEMPLATE_FOUND', status: 'success', message: 'Template ID encontrado no Google Docs drive', details: `ID: 1fT22Z7M9K6hX8...` },
-      { timestamp: '02/06/2026 17:52:14', step: 'GDI_PLACEHOLDERS_VALIDATED', status: 'success', message: 'Todos os placeholders do template mapeados', details: 'Total de chaves substituídas: 6' },
-      { timestamp: '02/06/2026 17:52:14', step: 'GDI_DESTINATION_FOLDER_VALIDATED', status: 'success', message: 'Pasta de destino do Drive está acessível e possui permissões', details: 'ID: 1H9D48... Autorização: OK' },
-      { timestamp: '02/06/2026 17:52:15', step: 'GDI_DOCUMENT_CREATION_STARTED', status: 'success', message: 'Cópia do template base inicializada', details: 'Google API Connector v2' },
-      { timestamp: '02/06/2026 17:52:17', step: 'GDI_DOCUMENT_CREATED', status: 'success', message: 'Variáveis substituídas e PDF gerado', details: 'Exportação via Google Drive PDF Engine' },
-      { timestamp: '02/06/2026 17:52:18', step: 'GDI_DOCUMENT_SAVED_TO_FOLDER', status: 'success', message: 'Arquivo salvo sob ID e URL designada', details: 'Google Drive File ID: 1eX... / Link gerado' },
-      { timestamp: '02/06/2026 17:52:18', step: 'GDI_RESULT_READY', status: 'success', message: 'Estrutura final de retorno formatada', details: 'Criador: Motor GDI Giffoni' },
-      { timestamp: '02/06/2026 17:52:19', step: 'GDI_RESULT_RETURNED_TO_PORTAL', status: 'success', message: 'Webhook enviado com código de retorno HTTP 200', details: 'Callback URL correspondente atualizada no BOSS' }
-    ]);
+    // Reset raw text payload to a perfectly valid complete mock!
+    const okMock = getMockPayloadForDoc(card.documentType, (card.category || 'PF').toUpperCase() as 'PF' | 'PJ');
+    setRawPayloadText(JSON.stringify(okMock, null, 2));
   };
 
   const handleSimulateFailure = (errorTypeString?: string) => {
@@ -429,6 +480,31 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
     } else {
       setTemplateStatus('validated');
       setTemplateError('');
+    }
+
+    // Adapt raw text payload in the editable area to simulate the error!
+    try {
+      const currentObj = JSON.parse(rawPayloadText);
+      if (errorType === 'PAYLOAD_EMPTY') {
+        setRawPayloadText('');
+      } else if (errorType === 'DOCUMENT_TYPE_MISSING') {
+        delete currentObj.documentType;
+        setRawPayloadText(JSON.stringify(currentObj, null, 2));
+      } else if (errorType === 'DOCUMENT_TYPE_INVALID') {
+        currentObj.documentType = 'TIPO_INVALIDO_OUTRO_DOC';
+        setRawPayloadText(JSON.stringify(currentObj, null, 2));
+      } else if (errorType === 'CLIENT_DATA_MISSING') {
+        delete currentObj.clientRawData;
+        setRawPayloadText(JSON.stringify(currentObj, null, 2));
+      } else if (errorType === 'DESTINATION_FOLDER_ID_MISSING') {
+        delete currentObj.destinationFolderId;
+        setRawPayloadText(JSON.stringify(currentObj, null, 2));
+      } else if (errorType === 'DESTINATION_FOLDER_URL_MISSING') {
+        delete currentObj.destinationFolderUrl;
+        setRawPayloadText(JSON.stringify(currentObj, null, 2));
+      }
+    } catch {
+      // Keep silent on syntax bugs
     }
 
     // Adjust diagnostic checklist steps based on error
@@ -651,6 +727,93 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
         {/* LEFT PANEL: AUTOMATION SERVICES, TEMPLATES, DRIVE MAPPING, PAYLOAD & CALLBACK SCHEMA */}
         <div className="lg:col-span-7 space-y-6">
 
+          {/* 1. CARD — JOBS RECEBIDOS */}
+          <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs">
+            <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-3">
+              <div className="flex items-center space-x-2.5">
+                <div className="h-8 w-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                  <Terminal className="h-4.5 w-4.5" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Jobs Recebidos</h3>
+                  <p className="text-[10px] text-slate-400">Verificação do fluxo de fila síncrona enviada do Portal BOSS</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className={`px-2.5 py-1 rounded text-[10px] font-bold uppercase ${
+                  simulationStatus === 'success' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'
+                }`}>
+                  Status do Job: {simulationStatus === 'success' ? 'CONCLUÍDO' : 'FALHA / ERRO'}
+                </span>
+                <span className="text-[10px] font-mono text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+                  Síncrono
+                </span>
+              </div>
+            </div>
+
+            <div className="space-y-4 text-xs font-sans">
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 divide-y divide-slate-150 space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pb-3">
+                  <div>
+                    <span className="text-[10px] font-mono font-bold text-slate-400 block uppercase tracking-wider">Último Job Recebido</span>
+                    <span className="text-xs text-slate-800 font-bold font-mono">#GDI-JOB-{(card.id || 'pf').toUpperCase()}-2026-003</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-mono font-bold text-slate-400 block uppercase tracking-wider">Horário de recebimento</span>
+                    <span className="text-xs text-slate-800 font-medium">02/06/2026 18:15:19</span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 py-3">
+                  <div>
+                    <span className="text-[9px] font-mono font-bold text-slate-400 block uppercase tracking-wider">documentType</span>
+                    <span className="text-[11px] text-blue-700 bg-blue-50 border border-blue-100 font-mono px-1.5 py-0.5 rounded font-bold">{card.documentType}</span>
+                  </div>
+                  <div>
+                    <span className="text-[9px] font-mono font-bold text-slate-400 block uppercase tracking-wider">caseId</span>
+                    <span className="text-[11px] font-mono font-semibold text-slate-700">{parsedPayload?.caseId || 'ca_98a72f1_boss'}</span>
+                  </div>
+                  <div>
+                    <span className="text-[9px] font-mono font-bold text-slate-400 block uppercase tracking-wider">clientId</span>
+                    <span className="text-[11px] font-mono font-semibold text-slate-700">{parsedPayload?.clientId || (card.category.toUpperCase() === 'PF' ? 'cli_pf_82a71' : 'cli_pj_44a29')}</span>
+                  </div>
+                  <div>
+                    <span className="text-[9px] font-mono font-bold text-slate-400 block uppercase tracking-wider">clientType</span>
+                    <span className="text-[11px] font-mono text-slate-700 font-bold">{card.category.toUpperCase()}</span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 pt-3">
+                  <div>
+                    <span className="text-[10px] font-mono font-bold text-slate-400 block uppercase tracking-wider">destinationFolderId recebido</span>
+                    <span className="text-xs font-mono font-bold text-slate-800 truncate block max-w-xs">{normalizedData.destinationFolderId || '1_dRiVe_fOlDeR_ID_mOcK_991823'}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-mono font-bold text-slate-400 block uppercase tracking-wider">destinationFolderUrl recebido</span>
+                    <span className="text-xs font-mono font-medium text-blue-650 truncate block max-w-xs">{normalizedData.destinationFolderUrl || 'https://drive.google.com/drive/folders/1_dRiVe_fOlDeR_ID_mOcK_991823'}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex gap-2 justify-end pt-1 bg-white">
+                <button 
+                  onClick={() => triggerCopy(rawPayloadText, 'payload')}
+                  className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 border border-slate-250 text-slate-700 text-xs font-semibold rounded-lg shadow-2xs transition active:scale-95 inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Copy className="h-3.5 w-3.5 text-slate-500" />
+                  <span>Copiar Payload</span>
+                </button>
+                <button 
+                  onClick={handleReprocess}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg shadow-sm transition active:scale-95 inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <RefreshCw className="h-3.5 w-3.5 text-blue-100" />
+                  <span>Reprocessar Job</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
           {/* 6. CARD — IDENTIFICAÇÃO DA AUTOMAÇÃO */}
           <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs">
             <div className="flex items-center space-x-2.5 mb-4 border-b border-slate-100 pb-3">
@@ -762,7 +925,7 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
                   <label className="text-[10px] uppercase font-mono font-bold text-slate-400 block mb-1">Nome de Exibição do Template</label>
                   <input 
                     type="text" 
-                    value={`Template Mestre Oficial de ${card.title} (v2.6)`} 
+                    value={card.id === 'procuracao-pf' ? "Procuração PF" : `Template Mestre Oficial de ${card.title}`} 
                     disabled
                     className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-slate-600 font-medium cursor-not-allowed text-xs" 
                   />
@@ -772,12 +935,13 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
                   <div className="flex gap-2">
                     <input 
                       type="text" 
-                      value={templateId} 
+                      value={card.id === 'procuracao-pf' ? "16k_n_BTdf8wTCG8CK4T2TyAT93o5qrmZqjbROtrBqzk" : templateId} 
+                      disabled={card.id === 'procuracao-pf'}
                       onChange={(e) => {
                         setTemplateId(e.target.value);
                         if(templateStatus === 'não_configurado') setTemplateStatus('configurado');
                       }}
-                      className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono text-[11px]" 
+                      className="w-full bg-white border border-slate-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono text-[11px] disabled:bg-slate-50 disabled:text-slate-500 disabled:cursor-not-allowed" 
                     />
                   </div>
                 </div>
@@ -787,7 +951,7 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
                 <div className="space-y-0.5">
                   <span className="text-[9px] uppercase font-bold text-slate-400 block">Link de Edição do Google Docs</span>
                   <a 
-                    href={`https://docs.google.com/document/d/${templateId}/edit`} 
+                    href={card.id === 'procuracao-pf' ? "https://docs.google.com/document/d/16k_n_BTdf8wTCG8CK4T2TyAT93o5qrmZqjbROtrBqzk/edit?tab=t.0" : `https://docs.google.com/document/d/${templateId}/edit`} 
                     target="_blank" 
                     rel="noreferrer" 
                     className="text-blue-600 font-bold underline break-all flex items-center gap-1 hover:text-blue-700"
@@ -797,24 +961,26 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
                   </a>
                 </div>
                 <div className="flex items-center gap-2">
+                  {card.id === 'procuracao-pf' && (
+                    <a
+                      href="https://drive.google.com/drive/u/0/folders/1fhMk2RMwEM7RlDCEOlKl5CsEjujX5zMJ"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-3 py-1.5 bg-sky-50 text-sky-700 border border-sky-100 font-bold rounded-lg hover:bg-sky-100 transition cursor-pointer flex items-center gap-1 text-xs"
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                      <span>Ver PDF Referência</span>
+                    </a>
+                  )}
                   <button 
                     onClick={() => {
-                      alert(`Avaliando template "${templateId}" contra API Docs...`);
+                      alert(`Avaliando template "${card.id === 'procuracao-pf' ? '16k_n_BTdf8wTCG8CK4T2TyAT93o5qrmZqjbROtrBqzk' : templateId}" contra API Docs...`);
                       setTemplateStatus('validated');
                       setTemplateError('');
                     }}
                     className="px-3 py-1.5 bg-white border border-slate-200 text-slate-700 font-bold rounded-lg hover:bg-slate-100 transition cursor-pointer"
                   >
-                    Validar Template
-                  </button>
-                  <button 
-                    onClick={() => {
-                      const win = window.open(`https://docs.google.com/document/d/${templateId}/edit`, '_blank');
-                      if(!win) alert('O navegador bloqueou o popup. Use o link de texto ao lado.');
-                    }}
-                    className="px-3 py-1.5 bg-blue-50 text-blue-700 font-bold rounded-lg hover:bg-blue-100 transition cursor-pointer"
-                  >
-                    Visualizar Docs
+                    Validar
                   </button>
                 </div>
               </div>
@@ -903,110 +1069,161 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
             </div>
           </div>
 
-          {/* 9. CARD — PASTA DE DESTINO */}
-          <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs">
-            <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-3">
+
+
+          {/* 10. MAPA DE VARIÁVEIS DO PORTAL BOSS (GDI LIVE ENGINE) */}
+          <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-5">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div className="flex items-center space-x-2.5">
-                <div className="h-8 w-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
-                  <FolderCheck className="h-4.5 w-4.5" />
+                <div className="h-8 w-8 rounded-lg bg-orange-50 text-orange-600 flex items-center justify-center">
+                  <Database className="h-4.5 w-4.5" />
                 </div>
                 <div>
-                  <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Armazenamento Dinâmico (Google Drive)</h3>
-                  <p className="text-[10px] text-slate-400">Atribuição de destino informada individualmente por chamada externa</p>
+                  <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wider">Mapa de Variáveis do Portal BOSS</h3>
+                  <p className="text-[10px] text-slate-400">Sandbox dinâmico GDI: alteração de payload e normalização paralela</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5 font-mono text-[10px]">
+                <span className="text-slate-400">Validação:</span>
+                {isPayloadValid ? (
+                  <span className="flex items-center gap-1 font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                    Saneado (Leitura OK)
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1 font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+                    Erro / Incompleto
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-500 leading-normal">
+              O Portal BOSS Clientes armazena e envia dados. O GDI recebe este conteúdo em matrizes mistas (<code className="font-mono text-amber-700 bg-amber-50">pfData</code> / <code className="font-mono text-amber-700 bg-amber-50">pfDadosPessoais</code>, etc). O validador unifica e cria aliases amigáveis mantendo o sigilo e segurança síncrona.
+            </p>
+
+            <div className="bg-blue-50 border border-blue-200 text-blue-800 p-3 rounded-lg flex items-start gap-2.5">
+              <Info className="h-4.5 w-4.5 text-blue-600 shrink-0 mt-0.5" />
+              <div className="text-xs leading-normal space-y-1">
+                <p><strong className="font-bold">Contrato de Armazenamento:</strong> Os campos <code className="font-mono bg-blue-100 px-0.5 text-blue-900">destinationFolderId</code> e <code className="font-mono bg-blue-100 px-0.5 text-blue-900">destinationFolderUrl</code> são recebidos dinamicamente da carga útil (payload) do Portal BOSS. Eles <strong className="font-bold underline text-blue-900">NÃO são configurados manualmente no GDI</strong>.</p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 font-mono text-[10px] text-blue-950">
+                  <div>• ID Ausente: <span className="font-bold text-rose-800">DESTINATION_FOLDER_ID_MISSING</span></div>
+                  <div>• URL Ausente: <span className="font-bold text-rose-800">DESTINATION_FOLDER_URL_MISSING</span></div>
+                  <div>• Escrita Negada: <span className="font-bold text-rose-800">DESTINATION_FOLDER_PERMISSION_DENIED</span></div>
                 </div>
               </div>
             </div>
 
-            <div className="space-y-4 text-xs">
-              <div className="bg-amber-50 border border-amber-200 text-amber-800 p-3 rounded-lg flex items-start gap-2.5">
-                <Info className="h-4.5 w-4.5 text-amber-600 shrink-0 mt-0.5" />
-                <p className="text-xs leading-normal">
-                  <strong className="font-bold">Aviso sobre Pasta Dinâmica:</strong> O GDI não salva arquivos em locais fixos arbitrariamente. O ID da pasta final de destino (<code className="font-mono bg-amber-100 px-0.5">destinationFolderId</code>) é especificado no objeto de dados recebido por webhook do Portal BOSS.
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Col 1: Dados Crus Recebidos (Editor) */}
+              <div className="space-y-1.5 flex flex-col">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] uppercase font-mono font-bold text-slate-400">1. Dados Crus (JSON Editável)</span>
+                  {parseError ? (
+                    <span className="text-[9px] text-rose-600 font-mono font-bold bg-rose-50 px-1 border border-rose-100 rounded">Sintaxe Inválida</span>
+                  ) : (
+                    <span className="text-[9px] text-emerald-600 font-mono font-bold bg-emerald-50 px-1 border border-emerald-100 rounded">Sintaxe JSON OK</span>
+                  )}
+                </div>
+                <textarea
+                  value={rawPayloadText}
+                  onChange={(e) => setRawPayloadText(e.target.value)}
+                  className="w-full h-80 bg-slate-900 text-slate-300 p-3 rounded-lg font-mono text-[10px] leading-relaxed border border-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none select-text"
+                  placeholder="Cole aqui o payload JSON..."
+                />
+                <p className="text-[9px] text-slate-400 italic">
+                  * Altere nomes ou valores em qualquer nó acima para ver os placeholders de teste mudarem instantaneamente!
                 </p>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-50 p-4 border border-slate-200 rounded-xl font-mono text-[11px]">
-                <div className="space-y-1">
-                  <span className="text-[9px] uppercase font-bold text-slate-400 block">Campos do Drive Mapeados</span>
-                  <div className="space-y-0.5">
-                    <div>Folder ID: <span className="text-slate-800 font-semibold">payload.destinationFolderId</span></div>
-                    <div>Folder Link: <span className="text-slate-800 font-semibold">payload.destinationFolderUrl</span></div>
-                  </div>
+              {/* Col 2: Dados Normalizados */}
+              <div className="space-y-1.5 flex flex-col">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] uppercase font-mono font-bold text-slate-400">2. Payload GDI Normalizado</span>
+                  <span className="text-[9px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded font-mono font-bold border border-blue-150">Saída em Barramento</span>
                 </div>
-                <div className="space-y-1">
-                  <span className="text-[9px] uppercase font-bold text-slate-400 block">Autorizações e Restrições operacionais</span>
-                  <div className="space-y-1 font-sans text-xs flex flex-col">
-                    <span className="inline-flex items-center gap-1 text-emerald-700 font-semibold">
-                      <Check className="h-3.5 w-3.5 text-emerald-500" /> destinationFolderId correspondente existe?
-                    </span>
-                    <span className="inline-flex items-center gap-1 text-emerald-700 font-semibold">
-                      <Check className="h-3.5 w-3.5 text-emerald-500" /> Permissões de escrita do GDI ativas?
-                    </span>
-                  </div>
+                <div className="bg-slate-900 border border-slate-800 rounded-lg h-80 overflow-y-auto p-3 font-mono text-[10px] text-emerald-400 leading-relaxed shadow-inner">
+                  <pre>{JSON.stringify(normalizedData, null, 2)}</pre>
                 </div>
+                <p className="text-[9px] text-slate-400 italic">
+                  * Segurança estrita: Senhas de acesso e outras credenciais privadas são excluídas do barramento.
+                </p>
               </div>
-
-              {/* Interactive failure state dropdown for destination folder */}
-              <div className="flex items-center justify-between border-t border-slate-100 pt-3 text-[11px] text-slate-500">
-                <span>Drive Adapter API: <strong className="text-emerald-600 font-bold">Autenticado via Service-Account</strong></span>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] text-slate-400 font-mono">Modulador de erros do Drive:</span>
-                  <select 
-                    value={simulationErrorType.startsWith('DESTINATION_') ? simulationErrorType : 'none'}
-                    onChange={(e) => {
-                      if(e.target.value === 'none') {
-                        handleSimulateSuccess();
-                      } else {
-                        setSimulationErrorType(e.target.value);
-                        handleSimulateFailure(e.target.value);
-                      }
-                    }}
-                    className="border border-slate-200 rounded px-1.5 py-0.5 bg-white text-xs font-mono text-slate-600 focus:outline-none"
-                  >
-                    <option value="none">Pasta Inteira e Acessível</option>
-                    <option value="DESTINATION_FOLDER_ID_MISSING">DESTINATION_FOLDER_ID_MISSING</option>
-                    <option value="DESTINATION_FOLDER_URL_MISSING">DESTINATION_FOLDER_URL_MISSING</option>
-                    <option value="DESTINATION_FOLDER_PERMISSION_DENIED">DESTINATION_FOLDER_PERMISSION_DENIED</option>
-                    <option value="DESTINATION_FOLDER_NOT_FOUND">DESTINATION_FOLDER_NOT_FOUND</option>
-                  </select>
-                </div>
-              </div>
-
-            </div>
-          </div>
-
-          {/* 10. CARD — CONTRATO DE DADOS RECEBIDO DO PORTAL BOSS */}
-          <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs">
-            <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-3">
-              <div className="flex items-center space-x-2.5">
-                <div className="h-8 w-8 rounded-lg bg-slate-900 text-slate-100 flex items-center justify-center">
-                  <FileJson className="h-4.5 w-4.5" />
-                </div>
-                <div>
-                  <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Contrato de Entrada (Payload do Portal BOSS)</h3>
-                  <p className="text-[10px] text-slate-400">JSON enviado pelo webhook do cliente para o GDI</p>
-                </div>
-              </div>
-              <button 
-                onClick={() => triggerCopy(getPayloadContractJson(), 'payload')}
-                className="text-blue-600 hover:text-blue-700 text-xs font-bold flex items-center gap-1 border border-slate-200 px-2 py-1 rounded hover:bg-slate-50"
-              >
-                <Copy className="h-3 w-3" />
-                <span>Copiar JSON</span>
-              </button>
             </div>
 
-            <div className="space-y-4">
-              <p className="text-xs text-slate-500 leading-normal">
-                Todas as automações exigem esse contrato estrito. Propriedades fundamentais tais como <code className="font-mono text-amber-700 bg-amber-50 px-0.5 font-bold">documentType</code>, <code className="font-mono text-amber-700 bg-amber-50 px-0.5 font-bold">caseId</code>, e <code className="font-mono text-amber-700 bg-amber-50 px-0.5 font-bold">destinationFolderId</code> são insubstituíveis.
-              </p>
-
-              <div className="bg-slate-900 rounded-xl overflow-hidden text-slate-300 p-4 font-mono text-[11px] leading-relaxed select-all max-h-[300px] overflow-y-auto shadow-inner relative">
-                <div className="absolute top-2 right-2 text-[9px] bg-slate-800 px-1.5 py-0.5 rounded text-slate-400 font-sans">
-                  CONTRATO ENTRADA
+            {/* Diagnostics details for required and absent fields */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3.5">
+              <h4 className="text-[10px] uppercase font-bold text-slate-600 tracking-wider font-mono">3. Auditoria e Diagnose de Variáveis</h4>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                {/* Required Minimum variables check */}
+                <div className="bg-white border border-slate-150 rounded-lg p-3 space-y-2">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-1.5">
+                    <span className="font-semibold text-slate-700">Mínimo Técnico Obrigatório</span>
+                    <span className="text-[10px] font-mono font-bold text-slate-400">Status</span>
+                  </div>
+                  <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                    {(card.category.toUpperCase() === 'PF' ? PF_MANDATORY_FIELDS : PJ_MANDATORY_FIELDS).map((field) => {
+                      const isFieldPushed = card.category.toUpperCase() === 'PF' 
+                        ? !!normalizedData.pf[field] 
+                        : (field.startsWith('pj_') ? !!normalizedData.pj[field] : !!normalizedData.representante[field]);
+                      return (
+                        <div key={field} className="flex items-center justify-between text-[11px]">
+                          <span className="font-mono text-slate-600 truncate max-w-[150px]">{field}</span>
+                          {isFieldPushed ? (
+                            <span className="text-emerald-600 font-bold flex items-center gap-1 bg-emerald-50 px-1.5 rounded text-[9px] uppercase">
+                              Preenchido
+                            </span>
+                          ) : (
+                            <span className="text-rose-600 font-bold flex items-center gap-1 bg-rose-50 px-1.5 rounded text-[9px] uppercase animate-pulse">
+                              Ausente
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
-                <pre>{getPayloadContractJson()}</pre>
+
+                {/* Absent Optional variables list */}
+                <div className="bg-white border border-slate-150 rounded-lg p-3 space-y-2">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-1.5">
+                    <span className="font-semibold text-slate-700">Campos Facultativos Ausentes</span>
+                    <span className="text-[10px] font-mono font-bold text-slate-400">Auditoria GDI</span>
+                  </div>
+                  <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                    {mapperResult.validation.absentFields.length > 0 ? (
+                      mapperResult.validation.absentFields.slice(0, 15).map((field) => (
+                        <div key={field} className="flex items-center justify-between text-[11px]">
+                          <span className="font-mono text-slate-500 line-through decoration-slate-300 truncate max-w-[150px]">{field}</span>
+                          <span className="text-amber-600 font-medium bg-amber-50 px-1.5 rounded text-[9px] uppercase">Em branco</span>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-slate-400 text-center py-4 italic text-[11px]">
+                        Nenhum campo facultativo ausente. Payload 100% preenchido!
+                      </div>
+                    )}
+                    {mapperResult.validation.absentFields.length > 15 && (
+                      <div className="text-[10px] text-slate-400 text-right mt-1">
+                        + {mapperResult.validation.absentFields.length - 15} outros...
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
+
+              {/* Status report blocks */}
+              {!isPayloadValid && (
+                <div className="bg-rose-50 border border-rose-100 rounded-lg p-3 flex gap-2.5 items-start">
+                  <AlertTriangle className="h-4.5 w-4.5 text-rose-500 shrink-0 mt-0.5 animate-bounce" />
+                  <div>
+                    <h5 className="text-xs font-bold text-rose-800">Falha Crítica na Matriz de Encomenda</h5>
+                    <p className="text-[11px] text-rose-700 leading-relaxed mt-0.5">
+                      {parseError ? `Sintaxe de dados desregulada: ${parseError}` : mapperResult.validation.errorMessage}
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -1056,7 +1273,54 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
         {/* RIGHT PANEL: TEST TRIGGERS, CHECKS, DIAGNOSTICS, LOGS AND REPROCESSING */}
         <div className="lg:col-span-5 space-y-6">
 
-          {/* 15. CARD — TESTES MÍNIMOS */}
+          {/* 5. CARD — DIAGNÓSTICO DA INTEGRAÇÃO */}
+          <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs">
+            <div className="flex items-center space-x-2.5 mb-2.5 border-b border-slate-100 pb-3">
+              <div className="h-8 w-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                <Settings2 className="h-4.5 w-4.5" />
+              </div>
+              <div>
+                <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Diagnóstico da Integração (10 Etapas GDI)</h3>
+                <p className="text-[10px] text-slate-400">Varreduras e rastreios automáticos para aprovação da automação</p>
+              </div>
+            </div>
+
+            <div className="space-y-2 text-xs font-sans">
+              
+              <div className="grid grid-cols-2 gap-1.5 font-mono text-[10px] text-slate-400 uppercase tracking-wider bg-slate-50 p-2.5 rounded-lg mb-2 flex justify-between items-center">
+                <span>Passo Verificação</span>
+                <span className="text-right">Status do Motor</span>
+              </div>
+
+              {[
+                { label: 'GDI recebeu payload?', val: diagnosticSteps.received },
+                { label: 'documentType é válido?', val: diagnosticSteps.docTypeValid },
+                { label: 'template está configurado?', val: diagnosticSteps.templateConfigured },
+                { label: 'placeholders estão mapeados?', val: diagnosticSteps.placeholdersMapped },
+                { label: 'Pasta recebida do Portal BOSS (aguardando payload)?', val: diagnosticSteps.destinationIdReceived },
+                { label: 'GDI tem permissão na pasta recebida?', val: diagnosticSteps.gdiHasPermission },
+                { label: 'documento foi criado?', val: diagnosticSteps.docCreated },
+                { label: 'documento foi salvo na pasta do Drive?', val: diagnosticSteps.savedToFolder },
+                { label: 'resultado foi preparado?', val: diagnosticSteps.resultPrepared },
+                { label: 'resultado foi devolvido ao Portal BOSS?', val: diagnosticSteps.returnedToBoss },
+              ].map((item, idx) => (
+                <div key={idx} className="flex justify-between items-center py-1 border-b border-slate-50 text-[11px]">
+                  <span className={`font-medium ${item.val ? 'text-slate-700' : 'text-slate-400 line-through'}`}>{item.label}</span>
+                  {item.val ? (
+                    <span className="font-bold text-emerald-600 flex items-center gap-1 font-mono text-[10px]">
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500"></span> [ OK ]
+                    </span>
+                  ) : (
+                    <span className="font-bold text-rose-600 flex items-center gap-1 font-mono text-[10px]">
+                      <span className="h-1.5 w-1.5 rounded-full bg-rose-500"></span> [ FALHA ]
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* 6. CARD — TESTES MÍNIMOS */}
           <div className="bg-slate-900 text-white rounded-xl border border-slate-800 p-5 shadow-md">
             <div className="flex items-center space-x-2.5 mb-4 border-b border-slate-800 pb-3">
               <div className="h-8 w-8 rounded-lg bg-blue-500/25 text-blue-400 flex items-center justify-center">
@@ -1079,7 +1343,7 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
                     handleSimulateSuccess();
                     alert(`Simulando recebimento de payload de ${card.title} vindo do Portal BOSS Clientes...\n\nStatus: SUCESSO.`);
                   }}
-                  className="px-3 py-2 bg-slate-800 hover:bg-slate-750 text-slate-100 border border-slate-700/60 rounded-lg text-left font-semibold font-sans flex flex-col justify-between"
+                  className="px-3 py-2 bg-slate-800 hover:bg-slate-750 text-slate-100 border border-slate-700/60 rounded-lg text-left font-semibold font-sans flex flex-col justify-between cursor-pointer"
                 >
                   <span className="text-emerald-400 font-mono text-[9px] uppercase font-bold mb-1">Passo Inicial</span>
                   <span>Testar payload exemplo</span>
@@ -1088,7 +1352,7 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
                   onClick={() => {
                     alert(`Varrendo correspondência das variáveis do Docs de ${card.id}...\n\nChaves analisadas: OK\nPlaceholders no Docs e Payload estão balanceados.`);
                   }}
-                  className="px-3 py-2 bg-slate-800 hover:bg-slate-750 text-slate-100 border border-slate-700/60 rounded-lg text-left font-semibold font-sans flex flex-col justify-between"
+                  className="px-3 py-2 bg-slate-800 hover:bg-slate-750 text-slate-100 border border-slate-700/60 rounded-lg text-left font-semibold font-sans flex flex-col justify-between cursor-pointer"
                 >
                   <span className="text-purple-400 font-mono text-[9px] uppercase font-bold mb-1">Campos Adjacentes</span>
                   <span>Mapeamento placeholders</span>
@@ -1097,21 +1361,21 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
                   onClick={() => {
                     setTemplateStatus('validated');
                     setTemplateError('');
-                    alert(`Google API Connector: ID do template verificado com sucesso.\nID: ${templateId}\nStatus: Ativo, Permissão de Leitura Confeccionada.`);
+                    alert(`Google API Connector: ID do template verificado com sucesso.\nID: ${card.id === 'procuracao-pf' ? '16k_n_BTdf8wTCG8CK4T2TyAT93o5qrmZqjbROtrBqzk' : templateId}\nStatus: Ativo, Permissão de Leitura Confeccionada.`);
                   }}
-                  className="px-3 py-2 bg-slate-800 hover:bg-slate-750 text-slate-100 border border-slate-700/60 rounded-lg text-left font-semibold font-sans flex flex-col justify-between"
+                  className="px-3 py-2 bg-slate-800 hover:bg-slate-750 text-slate-100 border border-slate-700/60 rounded-lg text-left font-semibold font-sans flex flex-col justify-between cursor-pointer"
                 >
                   <span className="text-amber-400 font-mono text-[9px] uppercase font-bold mb-1">Nuvem Google</span>
                   <span>Testar Template</span>
                 </button>
                 <button 
                   onClick={() => {
-                    alert(`Verificando permissões de escrita na pasta do drive: "payload.destinationFolderId"\n\nGoogle Drive API: Pasta existente e autorização confirmada.`);
+                    alert(`Verificando permissões de escrita na pasta recebida do drive: "${normalizedData.destinationFolderId || '1_dRiVe_fOlDeR_ID_mOcK_991823'}"\n\nGoogle Drive API: Pasta existente e autorização confirmada.`);
                   }}
-                  className="px-3 py-2 bg-slate-800 hover:bg-slate-750 text-slate-100 border border-slate-700/60 rounded-lg text-left font-semibold font-sans flex flex-col justify-between"
+                  className="px-3 py-2 bg-slate-800 hover:bg-slate-750 text-slate-100 border border-slate-700/60 rounded-lg text-left font-semibold font-sans flex flex-col justify-between cursor-pointer"
                 >
                   <span className="text-blue-400 font-mono text-[9px] uppercase font-bold mb-1">Armazenamento</span>
-                  <span>Testar Pasta Destino</span>
+                  <span>Testar Pasta Recebida</span>
                 </button>
               </div>
 
@@ -1157,6 +1421,7 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
                     <option value="CLIENT_ID_MISSING">CLIENT_ID_MISSING</option>
                     <option value="CLIENT_DATA_MISSING">CLIENT_DATA_MISSING</option>
                     <option value="DESTINATION_FOLDER_ID_MISSING">DESTINATION_FOLDER_ID_MISSING</option>
+                    <option value="DESTINATION_FOLDER_URL_MISSING">DESTINATION_FOLDER_URL_MISSING</option>
                     <option value="DESTINATION_FOLDER_PERMISSION_DENIED">DESTINATION_FOLDER_PERMISSION_DENIED</option>
                     <option value="DESTINATION_FOLDER_NOT_FOUND">DESTINATION_FOLDER_NOT_FOUND</option>
                     <option value="TEMPLATE_ID_MISSING">TEMPLATE_ID_MISSING</option>
@@ -1169,63 +1434,54 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
             </div>
           </div>
 
-          {/* 14. CARD — DIAGNÓSTICO DA INTEGRAÇÃO */}
+          {/* 7. CARD — REPROCESSAMENTO */}
           <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs">
             <div className="flex items-center space-x-2.5 mb-2.5 border-b border-slate-100 pb-3">
-              <div className="h-8 w-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
-                <Settings2 className="h-4.5 w-4.5" />
+              <div className="h-8 w-8 rounded-lg bg-slate-100 text-slate-700 flex items-center justify-center border border-slate-200">
+                <RefreshCw className="h-4.5 w-4.5" />
               </div>
               <div>
-                <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Diagnóstico da Integração (10 Etapas GDI)</h3>
-                <p className="text-[10px] text-slate-400">Varreduras e rastreios automáticos para aprovação da automação</p>
+                <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Controles de Reprocessamento</h3>
+                <p className="text-[10px] text-slate-400">Parâmetros de contingência e retry mecânico</p>
               </div>
             </div>
 
-            <div className="space-y-2 text-xs font-sans">
-              
-              <div className="grid grid-cols-2 gap-1.5 font-mono text-[10px] text-slate-400 uppercase tracking-wider bg-slate-50 p-2.5 rounded-lg mb-2 flex justify-between items-center">
-                <span>Passo Verificação</span>
-                <span className="text-right">Status do Motor</span>
-              </div>
+            <div className="space-y-3.5 text-xs font-sans">
+              <p className="text-xs text-slate-500 leading-normal">
+                Dispare ordens manuais para recalcular e rechecar payloads interrompidos por falha de tempo limite, indisponibilidade do Google Drive API ou permissão temporária negada.
+              </p>
 
-              {[
-                { label: 'GDI recebeu payload?', val: diagnosticSteps.received },
-                { label: 'documentType é válido?', val: diagnosticSteps.docTypeValid },
-                { label: 'template está configurado?', val: diagnosticSteps.templateConfigured },
-                { label: 'placeholders estão mapeados?', val: diagnosticSteps.placeholdersMapped },
-                { label: 'destinationFolderId foi recebido?', val: diagnosticSteps.destinationIdReceived },
-                { label: 'GDI tem permissão na pasta?', val: diagnosticSteps.gdiHasPermission },
-                { label: 'documento foi criado?', val: diagnosticSteps.docCreated },
-                { label: 'documento foi salvo na pasta do Drive?', val: diagnosticSteps.savedToFolder },
-                { label: 'resultado foi preparado?', val: diagnosticSteps.resultPrepared },
-                { label: 'resultado foi devolvido ao Portal BOSS?', val: diagnosticSteps.returnedToBoss },
-              ].map((item, idx) => (
-                <div key={idx} className="flex justify-between items-center py-1 border-b border-slate-50 text-[11px]">
-                  <span className={`font-medium ${item.val ? 'text-slate-700' : 'text-slate-450 line-through'}`}>{item.label}</span>
-                  {item.val ? (
-                    <span className="font-bold text-emerald-600 flex items-center gap-1 font-mono text-[10px]">
-                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500"></span> [ OK ]
-                    </span>
-                  ) : (
-                    <span className="font-bold text-rose-600 flex items-center gap-1 font-mono text-[10px]">
-                      <span className="h-1.5 w-1.5 rounded-full bg-rose-500"></span> [ FALHA ]
-                    </span>
-                  )}
+              <div className="grid grid-cols-2 gap-3 text-xs bg-slate-50 p-3 rounded-lg border border-slate-150 font-mono text-[11px]">
+                <div>
+                  <span className="text-[9px] uppercase font-bold text-slate-400 block mb-0.5">retryCount</span>
+                  <span className="font-bold text-slate-800">{retryCount} tentativas</span>
                 </div>
-              ))}
+                <div>
+                  <span className="text-[9px] uppercase font-bold text-slate-400 block mb-0.5">lastRetryAt</span>
+                  <span className="font-bold text-slate-800">{lastRetryAt}</span>
+                </div>
+                <div className="col-span-2 border-t border-slate-200 pt-2 mt-1">
+                  <span className="text-[9px] uppercase font-bold text-slate-400 block mb-1">Motivo catalogado</span>
+                  <input 
+                    type="text" 
+                    value={reprocessReason} 
+                    onChange={(e) => setReprocessReason(e.target.value)}
+                    className="w-full bg-white border border-slate-200 rounded px-2 py-1 text-[11px] text-slate-700 font-medium focus:outline-none focus:ring-1 focus:ring-blue-500" 
+                  />
+                </div>
+              </div>
+
+              <button 
+                onClick={handleReprocess}
+                className="w-full py-2 bg-slate-800 hover:bg-slate-900 border border-slate-700 text-white font-bold text-center rounded-lg shadow-2xs transition active:scale-[99%] cursor-pointer inline-flex items-center justify-center gap-1.5"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                <span>Reprocessar Job MANUALMENTE</span>
+              </button>
             </div>
           </div>
 
-          {/* 18. CARD — CRITÉRIO DE SUCESSO */}
-          <div className="bg-slate-50 rounded-xl border border-slate-200 p-5 font-sans">
-            <span className="text-[9px] uppercase font-bold text-slate-400 block tracking-widest mb-1">Critério de Avaliação</span>
-            <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-normal">Critério de Sucesso da Automação</h4>
-            <p className="text-xs text-slate-500 mt-2 leading-relaxed">
-              A automação de <strong className="text-slate-700">{getDocFriendlyName()}</strong> só será considerada concluída com sucesso quando os <strong className="text-slate-700">10 itens do diagnóstico forem aprovados sequencialmente</strong> e o feedback HTTP 200 for processado com recepção íntegra na respectiva instância no Portal BOSS.
-            </p>
-          </div>
-
-          {/* 17. CARD — ANTI-DUPLICIDADE */}
+          {/* 8. CARD — ANTI-DUPLICIDADE */}
           <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs">
             <div className="flex items-center space-x-2.5 mb-2.5 border-b border-slate-100 pb-3">
               <div className="h-8 w-8 rounded-lg bg-orange-50 text-orange-600 flex items-center justify-center">
@@ -1256,7 +1512,7 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
                 </div>
                 
                 {existingDocConflict && (
-                  <div className="bg-amber-105 border border-amber-200 text-amber-900 p-2.5 rounded text-[11px] leading-normal font-sans">
+                  <div className="bg-amber-100 border border-amber-200 text-amber-900 p-2.5 rounded text-[11px] leading-normal font-sans">
                     Um documento para <strong className="text-slate-900">Case #2026-98745</strong> com documentType <strong className="text-slate-900">{card.documentType}</strong> já foi gerado no Google Docs em 02/06/2026 às 17:52:19.
                   </div>
                 )}
@@ -1265,7 +1521,7 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
                   <span className="text-[10px] text-slate-400 font-mono">Simular colisão de arquivamento:</span>
                   <button 
                     onClick={() => setExistingDocConflict(prev => !prev)}
-                    className="px-2 py-1 rounded bg-white border border-slate-250 hover:bg-slate-55 text-slate-700 font-semibold cursor-pointer"
+                    className="px-2 py-1 rounded bg-white border border-slate-250 hover:bg-slate-50 text-slate-700 font-semibold cursor-pointer"
                   >
                     {existingDocConflict ? 'Solucionar Colisão' : 'Forçar Conflito'}
                   </button>
@@ -1320,146 +1576,113 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
             </div>
           </div>
 
-          {/* 16. CARD — REPROCESSAMENTO */}
-          <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs">
-            <div className="flex items-center space-x-2.5 mb-2.5 border-b border-slate-100 pb-3">
-              <div className="h-8 w-8 rounded-lg bg-slate-105 text-slate-700 flex items-center justify-center border border-slate-200">
-                <RefreshCw className="h-4.5 w-4.5" />
-              </div>
-              <div>
-                <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Controles de Reprocessamento</h3>
-                <p className="text-[10px] text-slate-400">Parâmetros de contingência e retry mecânico</p>
-              </div>
-            </div>
-
-            <div className="space-y-3.5 text-xs font-sans">
-              <p className="text-xs text-slate-500 leading-normal">
-                Dispare ordens manuais para recalcular e rechecar payloads interrompidos por falha de tempo limite, indisponibilidade do Google Drive API ou permissão temporária negada.
-              </p>
-
-              <div className="grid grid-cols-2 gap-3 text-xs bg-slate-50 p-3 rounded-lg border border-slate-150 font-mono text-[11px]">
-                <div>
-                  <span className="text-[9px] uppercase font-bold text-slate-400 block mb-0.5">retryCount</span>
-                  <span className="font-bold text-slate-800">{retryCount} tentativas</span>
-                </div>
-                <div>
-                  <span className="text-[9px] uppercase font-bold text-slate-400 block mb-0.5">lastRetryAt</span>
-                  <span className="font-bold text-slate-800">{lastRetryAt}</span>
-                </div>
-                <div className="col-span-2 border-t border-slate-200 pt-2 mt-1">
-                  <span className="text-[9px] uppercase font-bold text-slate-400 block mb-1">Motivo catalogado</span>
-                  <input 
-                    type="text" 
-                    value={reprocessReason} 
-                    onChange={(e) => setReprocessReason(e.target.value)}
-                    className="w-full bg-white border border-slate-200 rounded px-2 py-1 text-[11px] text-slate-700 font-medium focus:outline-none focus:ring-1 focus:ring-blue-500" 
-                  />
-                </div>
-              </div>
-
-              <button 
-                onClick={handleReprocess}
-                className="w-full py-2 bg-slate-800 hover:bg-slate-900 border border-slate-700 text-white font-bold text-center rounded-lg shadow-2xs transition active:scale-[99%] cursor-pointer inline-flex items-center justify-center gap-1.5"
-              >
-                <RefreshCw className="h-3.5 w-3.5" />
-                <span>Reprocessar Job MANUALMENTE</span>
-              </button>
-            </div>
+          {/* 9. CARD — CRITÉRIO DE SUCESSO */}
+          <div className="bg-slate-50 rounded-xl border border-slate-200 p-5 font-sans">
+            <span className="text-[9px] uppercase font-bold text-slate-400 block tracking-widest mb-1">Critério de Avaliação</span>
+            <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-normal">Critério de Sucesso da Automação</h4>
+            <p className="text-xs text-slate-500 mt-2 leading-relaxed">
+              A automação de <strong className="text-slate-700">{getDocFriendlyName()}</strong> só será considerada concluída com sucesso quando os <strong className="text-slate-700">10 itens do diagnóstico forem aprovados sequencialmente</strong> e o feedback HTTP 200 for processado com recepção íntegra na respectiva instância no Portal BOSS.
+            </p>
           </div>
 
-          {/* 13. CARD — LOGS DE FALHA */}
-          <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs">
-            <div className="flex items-center space-x-2.5 mb-3 border-b border-slate-100 pb-3">
-              <div className="h-8 w-8 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center">
-                <AlertTriangle className="h-4.5 w-4.5" />
-              </div>
-              <div>
-                <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Histórico de Erros Detalhados</h3>
-                <p className="text-[10px] text-slate-400">Falhas catalogadas em tempo de processamento</p>
-              </div>
-            </div>
-
-            {simulationStatus === 'success' ? (
-              <div className="bg-emerald-50 border border-emerald-100 p-4 rounded-xl text-center flex flex-col items-center justify-center text-xs">
-                <CheckCircle2 className="h-6 w-6 text-emerald-500 mb-2" />
-                <p className="font-bold text-emerald-800">Nenhum Erro Ativo</p>
-                <p className="text-emerald-600 text-[11px] mt-1">O motor GDI está rodando estavelmente nas simulações correspondentes.</p>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <div className="bg-rose-50 border border-rose-100 text-rose-800 p-4 rounded-xl space-y-3">
-                  <div className="flex justify-between items-start">
-                    <span className="font-mono text-xs font-bold text-rose-900 bg-rose-100 border border-rose-200 px-2 py-0.5 rounded uppercase">
-                      CÓDIGO: {getErrorTypeDetail(simulationErrorType).code}
-                    </span>
-                    <span className="text-[10px] font-mono text-rose-600 font-bold">{getErrorTypeDetail(simulationErrorType).step}</span>
-                  </div>
-                  
-                  <div>
-                    <h5 className="font-bold text-xs text-rose-900">Mensagem catalogada:</h5>
-                    <p className="text-xs text-rose-800 leading-normal font-sans mt-0.5">“{getErrorTypeDetail(simulationErrorType).message}”</p>
-                  </div>
-
-                  <div>
-                    <h5 className="font-bold text-[10px] uppercase font-mono text-rose-900/60">Etapa de Falha e Diagnóstico:</h5>
-                    <p className="text-xs text-rose-800 font-sans mt-0.5">{getErrorTypeDetail(simulationErrorType).reason}</p>
-                  </div>
-
-                  <div className="bg-rose-900 text-rose-100 font-mono text-[10px] p-3 rounded-lg overflow-x-auto shadow-inner select-all leading-normal">
-                    <span className="text-[8px] bg-rose-800 px-1 py-0.5 rounded text-rose-300 font-sans block w-fit mb-1 font-bold uppercase">Technical Stack Tracer</span>
-                    <pre className="break-all">{getErrorTypeDetail(simulationErrorType).stack}</pre>
-                  </div>
-
-                  <div className="flex gap-2 pt-1">
-                    <button 
-                      onClick={() => triggerCopy(getErrorTypeDetail(simulationErrorType).message, 'error')}
-                      className="px-2.5 py-1.5 bg-white hover:bg-rose-100 border border-rose-200 text-rose-700 hover:text-rose-900 rounded font-bold text-[11px] transition cursor-pointer flex-1 text-center"
-                    >
-                      Copiar Erro
-                    </button>
-                    <button 
-                      onClick={() => triggerCopy(getPayloadContractJson(), 'payload')}
-                      className="px-2.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded font-bold text-[11px] transition cursor-pointer flex-1 text-center"
-                    >
-                      Copiar Payload
-                    </button>
-                    <button 
-                      onClick={handleReprocess}
-                      className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-200 rounded font-bold text-[11px] transition cursor-pointer flex-1 text-center"
-                    >
-                      Reprocessar
-                    </button>
-                  </div>
+          {/* 10. CARDS — LOGS */}
+          <div className="space-y-6">
+            
+            {/* LOGS DE FALHA */}
+            <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs">
+              <div className="flex items-center space-x-2.5 mb-3 border-b border-slate-100 pb-3">
+                <div className="h-8 w-8 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center">
+                  <AlertTriangle className="h-4.5 w-4.5" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Histórico de Erros Detalhados</h3>
+                  <p className="text-[10px] text-slate-400">Falhas catalogadas em tempo de processamento</p>
                 </div>
               </div>
-            )}
-          </div>
 
-          {/* 12. CARD — LOGS DE SUCESSO */}
-          <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs">
-            <div className="flex items-center space-x-2.5 mb-3 border-b border-slate-100 pb-3">
-              <div className="h-8 w-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
-                <History className="h-4.5 w-4.5" />
-              </div>
-              <div>
-                <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Histórico de Passos Logados</h3>
-                <p className="text-[10px] text-slate-400">Logs de eventos (webhooks) cronologicamente listados</p>
-              </div>
-            </div>
-
-            <div className="space-y-3 font-mono text-[11px] leading-normal text-slate-600 max-h-[300px] overflow-y-auto pr-1">
-              {performanceLogs.map((log, index) => (
-                <div key={index} className="border-l-2 border-slate-200 pl-3.5 py-1 relative">
-                  <span className={`absolute left-[-5px] top-2 h-2.5 w-2.5 rounded-full border border-white ${log.status === 'success' ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
-                  <div className="flex items-center justify-between text-[10px] text-slate-400 mb-0.5">
-                    <span>{log.timestamp}</span>
-                    <span className={`font-bold uppercase tracking-wider ${log.status === 'success' ? 'text-emerald-600' : 'text-rose-600'}`}>{log.step}</span>
-                  </div>
-                  <p className="font-bold text-slate-800">{log.message}</p>
-                  <p className="text-[10px] text-slate-500 font-sans mt-0.5">{log.details}</p>
+              {simulationStatus === 'success' ? (
+                <div className="bg-emerald-50 border border-emerald-100 p-4 rounded-xl text-center flex flex-col items-center justify-center text-xs">
+                  <CheckCircle2 className="h-6 w-6 text-emerald-500 mb-2" />
+                  <p className="font-bold text-emerald-800">Nenhum Erro Ativo</p>
+                  <p className="text-emerald-600 text-[11px] mt-1">O motor GDI está rodando estavelmente nas simulações correspondentes.</p>
                 </div>
-              ))}
+              ) : (
+                <div className="space-y-4">
+                  <div className="bg-rose-50 border border-rose-100 text-rose-800 p-4 rounded-xl space-y-3">
+                    <div className="flex justify-between items-start">
+                      <span className="font-mono text-xs font-bold text-rose-900 bg-rose-100 border border-rose-200 px-2 py-0.5 rounded uppercase">
+                        CÓDIGO: {getErrorTypeDetail(simulationErrorType).code}
+                      </span>
+                      <span className="text-[10px] font-mono text-rose-600 font-bold">{getErrorTypeDetail(simulationErrorType).step}</span>
+                    </div>
+                    
+                    <div>
+                      <h5 className="font-bold text-xs text-rose-900">Mensagem catalogada:</h5>
+                      <p className="text-xs text-rose-800 leading-normal font-sans mt-0.5">“{getErrorTypeDetail(simulationErrorType).message}”</p>
+                    </div>
+
+                    <div>
+                      <h5 className="font-bold text-[10px] uppercase font-mono text-rose-900/60">Etapa de Falha e Diagnóstico:</h5>
+                      <p className="text-xs text-rose-800 font-sans mt-0.5">{getErrorTypeDetail(simulationErrorType).reason}</p>
+                    </div>
+
+                    <div className="bg-rose-900 text-rose-100 font-mono text-[10px] p-3 rounded-lg overflow-x-auto shadow-inner select-all leading-normal">
+                      <span className="text-[8px] bg-rose-800 px-1 py-0.5 rounded text-rose-300 font-sans block w-fit mb-1 font-bold uppercase">Technical Stack Tracer</span>
+                      <pre className="break-all">{getErrorTypeDetail(simulationErrorType).stack}</pre>
+                    </div>
+
+                    <div className="flex gap-2 pt-1">
+                      <button 
+                        onClick={() => triggerCopy(getErrorTypeDetail(simulationErrorType).message, 'error')}
+                        className="px-2.5 py-1.5 bg-white hover:bg-rose-100 border border-rose-200 text-rose-700 hover:text-rose-900 rounded font-bold text-[11px] transition cursor-pointer flex-1 text-center"
+                      >
+                        Copiar Erro
+                      </button>
+                      <button 
+                        onClick={() => triggerCopy(getPayloadContractJson(), 'payload')}
+                        className="px-2.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded font-bold text-[11px] transition cursor-pointer flex-1 text-center"
+                      >
+                        Copiar Payload
+                      </button>
+                      <button 
+                        onClick={handleReprocess}
+                        className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-200 rounded font-bold text-[11px] transition cursor-pointer flex-1 text-center"
+                      >
+                        Reprocessar
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
+
+            {/* LOGS DE SUCESSO */}
+            <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs">
+              <div className="flex items-center space-x-2.5 mb-3 border-b border-slate-100 pb-3">
+                <div className="h-8 w-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
+                  <History className="h-4.5 w-4.5" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Histórico de Passos Logados</h3>
+                  <p className="text-[10px] text-slate-400">Logs de eventos (webhooks) cronologicamente listados</p>
+                </div>
+              </div>
+
+              <div className="space-y-3 font-mono text-[11px] leading-normal text-slate-600 max-h-[300px] overflow-y-auto pr-1">
+                {performanceLogs.map((log, index) => (
+                  <div key={index} className="border-l-2 border-slate-200 pl-3.5 py-1 relative">
+                    <span className={`absolute left-[-5px] top-2 h-2.5 w-2.5 rounded-full border border-white ${log.status === 'success' ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
+                    <div className="flex items-center justify-between text-[10px] text-slate-400 mb-0.5">
+                      <span>{log.timestamp}</span>
+                      <span className={`font-bold uppercase tracking-wider ${log.status === 'success' ? 'text-emerald-600' : 'text-rose-600'}`}>{log.step}</span>
+                    </div>
+                    <p className="font-bold text-slate-800">{log.message}</p>
+                    <p className="text-[10px] text-slate-500 font-sans mt-0.5">{log.details}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
           </div>
 
         </div>
