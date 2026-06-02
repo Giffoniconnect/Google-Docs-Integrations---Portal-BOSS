@@ -197,8 +197,8 @@ export default function CentralView({ onOpenDetail, onOpenNovaIntegracao }: Cent
           </div>
           <div>
             <p className="text-[10px] text-slate-400 font-mono uppercase">Integração Google</p>
-            <p className="text-xs font-bold font-mono text-slate-400 mt-1 flex items-center gap-1.5">
-              Estática (Sandbox) <span className="h-2 w-2 rounded-full bg-slate-400"></span>
+            <p className="text-xs font-bold font-mono text-emerald-400 mt-1 flex items-center gap-1.5">
+              Ativa (GDI Live) <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
             </p>
           </div>
         </div>

@@ -173,7 +173,7 @@ function PrimaryApp() {
             <p className="font-semibold text-slate-500">
               Plataforma BOSS — Giffoni Connect
             </p>
-            <p className="mt-0.5 font-medium">Motor Documental Auxiliar • Design & Validation Sandbox</p>
+            <p className="mt-0.5 font-medium">Motor Documental Auxiliar • GDocs & Google Drive Engine</p>
           </div>
           <div className="flex items-center space-x-4">
             <span className="flex items-center gap-1.5 font-sans">

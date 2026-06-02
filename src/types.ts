@@ -12,3 +12,13 @@ export interface DocCard {
   configRoute: string;
   documentType: string;
 }
+
+export type GoogleDocsCard = DocCard;
+
+export interface GdiLogEntry {
+  timestamp: string;
+  step: string;
+  status: 'success' | 'failed';
+  message: string;
+  details?: string;
+}
