@@ -9,4 +9,6 @@ export interface DocCard {
   icon: string;
   category: 'pf' | 'pj';
   route: string;
+  configRoute: string;
+  documentType: string;
 }

@@ -34,7 +34,9 @@ export default function CentralView({ onOpenDetail, onOpenNovaIntegracao }: Cent
       description: 'Automação futura de procurações para pessoas físicas.',
       status: 'active',
       icon: 'FileText',
-      route: '/boss-giffoni-clientes/configuracoes/integracoes-google-docs/procuracao-pf'
+      route: '/automacao-procuracao-pf',
+      configRoute: '/automacao-procuracao-pf/configuracao-da-procuracao-pf',
+      documentType: 'procuracao_pf'
     },
     {
       id: 'declaracao-pobreza-pf',
@@ -44,7 +46,9 @@ export default function CentralView({ onOpenDetail, onOpenNovaIntegracao }: Cent
       description: 'Automação futura de declarações de hipossuficiência para pessoa física.',
       status: 'development',
       icon: 'Scale',
-      route: '/boss-giffoni-clientes/configuracoes/integracoes-google-docs/declaracao-pobreza-pf'
+      route: '/automacao-declaracao-pobreza-pf',
+      configRoute: '/automacao-declaracao-pobreza-pf/configuracao-da-declaracao-pobreza-pf',
+      documentType: 'declaracao_pobreza_pf'
     },
     {
       id: 'contrato-honorarios-pf',
@@ -54,7 +58,9 @@ export default function CentralView({ onOpenDetail, onOpenNovaIntegracao }: Cent
       description: 'Automação futura de contratos de prestação de serviços advocatícios PF.',
       status: 'development',
       icon: 'Scale',
-      route: '/boss-giffoni-clientes/configuracoes/integracoes-google-docs/contrato-honorarios-pf'
+      route: '/automacao-contrato-honorarios-pf',
+      configRoute: '/automacao-contrato-honorarios-pf/configuracao-do-contrato-honorarios-pf',
+      documentType: 'contrato_honorarios_pf'
     },
     {
       id: 'primeiro-atendimento-pf',
@@ -64,7 +70,9 @@ export default function CentralView({ onOpenDetail, onOpenNovaIntegracao }: Cent
       description: 'Automação futura da ficha de entrevista e 1º atendimento PF.',
       status: 'development',
       icon: 'Users',
-      route: '/boss-giffoni-clientes/configuracoes/integracoes-google-docs/primeiro-atendimento-pf'
+      route: '/automacao-primeiro-atendimento-pf',
+      configRoute: '/automacao-primeiro-atendimento-pf/configuracao-do-primeiro-atendimento-pf',
+      documentType: 'primeiro_atendimento_pf'
     },
 
     // --- PESSOA JURÍDICA ---
@@ -76,7 +84,9 @@ export default function CentralView({ onOpenDetail, onOpenNovaIntegracao }: Cent
       description: 'Automação futura de procurações para pessoas jurídicas.',
       status: 'development',
       icon: 'Building2',
-      route: '/boss-giffoni-clientes/configuracoes/integracoes-google-docs/procuracao-pj'
+      route: '/automacao-procuracao-pj',
+      configRoute: '/automacao-procuracao-pj/configuracao-da-procuracao-pj',
+      documentType: 'procuracao_pj'
     },
     {
       id: 'declaracao-pobreza-pj',
@@ -86,7 +96,9 @@ export default function CentralView({ onOpenDetail, onOpenNovaIntegracao }: Cent
       description: 'Automação futura de declarações de hipossuficiência para pessoa jurídica.',
       status: 'development',
       icon: 'Scale',
-      route: '/boss-giffoni-clientes/configuracoes/integracoes-google-docs/declaracao-pobreza-pj'
+      route: '/automacao-declaracao-pobreza-pj',
+      configRoute: '/automacao-declaracao-pobreza-pj/configuracao-da-declaracao-pobreza-pj',
+      documentType: 'declaracao_pobreza_pj'
     },
     {
       id: 'contrato-honorarios-pj',
@@ -96,7 +108,9 @@ export default function CentralView({ onOpenDetail, onOpenNovaIntegracao }: Cent
       description: 'Automação futura de contratos de prestação de serviços advocatícios PJ.',
       status: 'development',
       icon: 'Scale',
-      route: '/boss-giffoni-clientes/configuracoes/integracoes-google-docs/contrato-honorarios-pj'
+      route: '/automacao-contrato-honorarios-pj',
+      configRoute: '/automacao-contrato-honorarios-pj/configuracao-do-contrato-honorarios-pj',
+      documentType: 'contrato_honorarios_pj'
     },
     {
       id: 'primeiro-atendimento-pj',
@@ -106,7 +120,9 @@ export default function CentralView({ onOpenDetail, onOpenNovaIntegracao }: Cent
       description: 'Automação futura do documento de primeiro atendimento corporativo PJ.',
       status: 'development',
       icon: 'Users',
-      route: '/boss-giffoni-clientes/configuracoes/integracoes-google-docs/primeiro-atendimento-pj'
+      route: '/automacao-primeiro-atendimento-pj',
+      configRoute: '/automacao-primeiro-atendimento-pj/configuracao-do-primeiro-atendimento-pj',
+      documentType: 'primeiro_atendimento_pj'
     }
   ];
 
