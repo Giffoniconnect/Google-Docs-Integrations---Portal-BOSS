@@ -641,6 +641,16 @@ app.post("/api/jobs/clear", (req, res) => {
   res.json({ success: true });
 });
 
+// Helper custom error for strict diagnostic categorization required by Portal BOSS
+class GdiAutomationError extends Error {
+  errorCode: string;
+  constructor(errorCode: string, message: string) {
+    super(message);
+    this.errorCode = errorCode;
+    this.name = "GdiAutomationError";
+  }
+}
+
 // Helper to execute GDI Automation via standard REST APIs of Google Docs and Drive
 async function executeGdiAutomation(
   payload: any
@@ -648,7 +658,10 @@ async function executeGdiAutomation(
   // Parse and normalize the payload
   const { normalized, validation } = normalizePortalBossPayload(payload);
   if (!validation.isValid) {
-    throw new Error(`Dados inválidos no payload: ${validation.errorMessage || 'Erro inesperado'}`);
+    throw new GdiAutomationError(
+      "PAYLOAD_INVALID",
+      `Dados inválidos no payload: ${validation.errorMessage || "Erro de validação"}`
+    );
   }
 
   const documentType = normalized.documentType;
@@ -672,7 +685,10 @@ async function executeGdiAutomation(
   const templateId = config?.templateGoogleDocsId ? config.templateGoogleDocsId.trim() : "";
 
   if (!templateId) {
-    throw new Error(`Template não configurado para o tipo de documento "${documentType}".`);
+    throw new GdiAutomationError(
+      "SERVICE_ACCOUNT_TEMPLATE_PERMISSION_DENIED",
+      `Template mestre não configurado ou ID do template vazio para o tipo de documento "${documentType}".`
+    );
   }
 
   // Get service account token
@@ -681,20 +697,45 @@ async function executeGdiAutomation(
     const authRes = await getActiveToken();
     token = authRes.token;
   } catch (err: any) {
-    throw new Error("O template ou a pasta não foi compartilhado com a Service Account.");
+    throw new GdiAutomationError(
+      "SERVICE_ACCOUNT_TEMPLATE_PERMISSION_DENIED",
+      "Não foi possível obter um token de acesso de Service Account. Verifique se as credenciais cadastrais estão corretas."
+    );
   }
 
   const logs: any[] = [];
 
   // Test 1: Read template metadata
   logs.push({ timestamp: getFormattedNow(), step: "GDI_DOCS_VERIFICATION_CALL", status: "success", message: `Teste 1: Lendo o template Google Docs original... ID: ${templateId}` });
-  const docRes = await fetch(`https://docs.googleapis.com/v1/documents/${templateId}`, {
-    headers: { "Authorization": `Bearer ${token}` }
-  });
-  if (!docRes.ok) {
-    throw new Error("O template ou a pasta não foi compartilhado com a Service Account.");
+  let docRes;
+  try {
+    docRes = await fetch(`https://docs.googleapis.com/v1/documents/${templateId}`, {
+      headers: { "Authorization": `Bearer ${token}` }
+    });
+  } catch (err: any) {
+    throw new GdiAutomationError(
+      "SERVICE_ACCOUNT_TEMPLATE_PERMISSION_DENIED",
+      `Falha de rede ao conectar à api do Google Docs: ${err.message}`
+    );
   }
-  const docObj = await docRes.json();
+
+  if (!docRes.ok) {
+    throw new GdiAutomationError(
+      "SERVICE_ACCOUNT_TEMPLATE_PERMISSION_DENIED",
+      "O template original do Google Docs não pôde ser lido pela Service Account. Verifique se o documento foi compartilhado corretamente."
+    );
+  }
+
+  let docObj;
+  try {
+    docObj = await docRes.json();
+  } catch (err) {
+    throw new GdiAutomationError(
+      "SERVICE_ACCOUNT_TEMPLATE_PERMISSION_DENIED",
+      "Resposta inválida da API do Google Docs ao ler o template mestre."
+    );
+  }
+
   const docTitle = docObj.title || "Documento";
   logs.push({ timestamp: getFormattedNow(), step: "GDI_DOCS_TEMPLATE_READ_SUCCESS", status: "success", message: `Teste 1 Concluído! Conteúdo e metadados lidos com sucesso. Título do mestre: "${docTitle}"` });
 
@@ -708,19 +749,53 @@ async function executeGdiAutomation(
     copyBody.parents = [destinationFolderId];
   }
 
-  const copyRes = await fetch(`https://www.googleapis.com/drive/v3/files/${templateId}/copy`, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${token}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(copyBody)
-  });
+  let copyRes;
+  try {
+    copyRes = await fetch(`https://www.googleapis.com/drive/v3/files/${templateId}/copy`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(copyBody)
+    });
+  } catch (err: any) {
+    throw new GdiAutomationError(
+      "GOOGLE_DOCS_TEMPLATE_COPY_FAILED",
+      `Erro de rede ao copiar template Docs: ${err.message}`
+    );
+  }
 
   if (!copyRes.ok) {
-    throw new Error("O template ou a pasta não foi compartilhado com a Service Account.");
+    let errDetail = "";
+    try {
+      const errJson = await copyRes.json();
+      errDetail = errJson.error?.message || "";
+    } catch {}
+
+    if (destinationFolderId) {
+      throw new GdiAutomationError(
+        "SERVICE_ACCOUNT_DESTINATION_FOLDER_PERMISSION_DENIED",
+        `A pasta de destino "${destinationFolderId}" não foi compartilhada com a Service Account ou esta não possui permissão de escrita. Detalhes: ${errDetail}`
+      );
+    } else {
+      throw new GdiAutomationError(
+        "GOOGLE_DOCS_TEMPLATE_COPY_FAILED",
+        `A cópia do template Google Docs no Drive falhou. Verifique as credenciais da Service Account. Detalhes: ${errDetail}`
+      );
+    }
   }
-  const copyObj = await copyRes.json();
+
+  let copyObj;
+  try {
+    copyObj = await copyRes.json();
+  } catch (err) {
+    throw new GdiAutomationError(
+      "GOOGLE_DOCS_TEMPLATE_COPY_FAILED",
+      "Resposta de cópia inválida recebida da API do Google Drive."
+    );
+  }
+
   const copiedId = copyObj.id;
   logs.push({ timestamp: getFormattedNow(), step: "GDI_CREATING_DOCUMENT", status: "success", message: `Teste 2 Concluído! Cópia descritiva de trabalho criada sob ID: ${copiedId}` });
 
@@ -739,16 +814,34 @@ async function executeGdiAutomation(
   }));
 
   if (requests.length > 0) {
-    const updateRes = await fetch(`https://docs.googleapis.com/v1/documents/${copiedId}:batchUpdate`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${token}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ requests })
-    });
+    let updateRes;
+    try {
+      updateRes = await fetch(`https://docs.googleapis.com/v1/documents/${copiedId}:batchUpdate`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${token}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ requests })
+      });
+    } catch (err: any) {
+      throw new GdiAutomationError(
+        "GOOGLE_DOCS_PLACEHOLDER_REPLACE_FAILED",
+        `Falha de rede ao tentar atualizar placeholders via Docs API: ${err.message}`
+      );
+    }
+
     if (!updateRes.ok) {
-      throw new Error("O template ou a pasta não foi compartilhado com a Service Account.");
+      let errDetail = "";
+      try {
+        const errJson = await updateRes.json();
+        errDetail = errJson.error?.message || "";
+      } catch {}
+
+      throw new GdiAutomationError(
+        "GOOGLE_DOCS_PLACEHOLDER_REPLACE_FAILED",
+        `Falha em batchUpdate substituindo marcadores no Google Docs. Detalhes: ${errDetail}`
+      );
     }
   }
   logs.push({ timestamp: getFormattedNow(), step: "GDI_REPLACING_PLACEHOLDERS", status: "success", message: `Teste 3 Concluído! Placeholders substituídos com sucesso no Google Docs.` });
@@ -756,11 +849,23 @@ async function executeGdiAutomation(
   // Test 4: Save to target Drive folder verification
   logs.push({ timestamp: getFormattedNow(), step: "GDI_SAVE_TO_DRIVE", status: "success", message: `Teste 4: Confirmando gravação na pasta de destino...` });
   if (destinationFolderId) {
-    const verifyRes = await fetch(`https://www.googleapis.com/drive/v3/files/${copiedId}?fields=parents`, {
-      headers: { "Authorization": `Bearer ${token}` }
-    });
+    let verifyRes;
+    try {
+      verifyRes = await fetch(`https://www.googleapis.com/drive/v3/files/${copiedId}?fields=parents`, {
+        headers: { "Authorization": `Bearer ${token}` }
+      });
+    } catch (err: any) {
+      throw new GdiAutomationError(
+        "SERVICE_ACCOUNT_DESTINATION_FOLDER_PERMISSION_DENIED",
+        `Falha de rede ao validar propriedade de pasta pai no Google Drive: ${err.message}`
+      );
+    }
+
     if (!verifyRes.ok) {
-      throw new Error("O template ou a pasta não foi compartilhado com a Service Account.");
+      throw new GdiAutomationError(
+        "SERVICE_ACCOUNT_DESTINATION_FOLDER_PERMISSION_DENIED",
+        "A pasta de destino de gravação não pôde ser lida síncronamente pela Service Account."
+      );
     }
   }
   logs.push({ timestamp: getFormattedNow(), step: "GDI_SAVING_TO_DRIVE", status: "success", message: `Teste 4 Concluído! Arquivo final gravado e indexado no diretório esperado.` });
@@ -864,123 +969,56 @@ app.post("/api/webhook/gdi-job", async (req, res) => {
   // Create real Job process workflow
   const jobId = "job_" + Math.random().toString(36).substring(2, 11);
 
-  // If Service Account email and private key are configured, attempt real Google Workspace API automation
+  // Check if Service Account email and private key are configured
   const hasSa = !!credentialsConfig.gdiGoogleServiceAccountEmail && !!credentialsConfig.gdiGoogleServiceAccountPrivateKey;
   
-  if (hasSa) {
-    try {
-      const result = await executeGdiAutomation(payload);
-      
-      const newJob: Job = {
-        id: jobId,
-        source: payload.source || "Portal BOSS Clientes",
-        target: "GDI",
-        documentType,
-        status: "success",
-        caseId,
-        clientId,
-        clientType,
-        destinationFolderId,
-        destinationFolderUrl,
-        payload,
-        result: {
-          googleDocsId: result.googleDocsId,
-          googleDocsUrl: result.googleDocsUrl,
-          fileName: result.fileName,
-          pdfUrl: result.pdfUrl,
-        },
-        errorCode: null,
-        errorMessage: null,
-        logs: [...logs, ...result.logs],
-        createdAt: timestampIso,
-        updatedAt: timestampIso
-      };
+  if (!hasSa) {
+    const errMsg = "A Service Account não está configurada no GDI síncrono. Cadastre o e-mail e chave privada nas credenciais.";
+    logs.push({
+      timestamp: nowStr,
+      step: "failed",
+      status: "failed",
+      message: errMsg
+    });
 
-      jobsStore.unshift(newJob);
-      saveJobs();
+    const failedJob: Job = {
+      id: jobId,
+      source: payload.source || "Portal BOSS Clientes",
+      target: "GDI",
+      documentType,
+      status: "failed",
+      caseId,
+      clientId,
+      clientType,
+      destinationFolderId,
+      destinationFolderUrl,
+      payload,
+      result: { googleDocsId: null, googleDocsUrl: null, fileName: null, pdfUrl: null },
+      errorCode: "SERVICE_ACCOUNT_NOT_CONFIGURED",
+      errorMessage: errMsg,
+      logs,
+      createdAt: timestampIso,
+      updatedAt: timestampIso
+    };
 
-      if (credentialsConfig.gdiPortalBossWebhookUrl) {
-        console.log(`GDI: Enviando callback síncrono real para ${credentialsConfig.gdiPortalBossWebhookUrl}`);
-      }
+    jobsStore.unshift(failedJob);
+    saveJobs();
 
-      return res.json({
-        status: "success",
-        documentType,
-        caseId,
-        clientId,
-        googleDocsId: result.googleDocsId,
-        googleDocsUrl: result.googleDocsUrl,
-        fileName: result.fileName,
-        destinationFolderId,
-        destinationFolderUrl,
-        generatedAt: timestampIso,
-        logs: newJob.logs
-      });
-    } catch (err: any) {
-      console.error("GDI real execution failed:", err);
-      
-      const errMsg = "O template ou a pasta não foi compartilhado com a Service Account.";
-      logs.push({
-        timestamp: nowStr,
-        step: "failed",
-        status: "failed",
-        message: errMsg,
-        details: err.message
-      });
+    return res.status(400).json({
+      status: "failed",
+      documentType,
+      caseId,
+      clientId,
+      errorCode: "SERVICE_ACCOUNT_NOT_CONFIGURED",
+      errorMessage: errMsg,
+      failedAt: timestampIso,
+      logs
+    });
+  }
 
-      const failedJob: Job = {
-        id: jobId,
-        source: payload.source || "Portal BOSS Clientes",
-        target: "GDI",
-        documentType,
-        status: "failed",
-        caseId,
-        clientId,
-        clientType,
-        destinationFolderId,
-        destinationFolderUrl,
-        payload,
-        result: { googleDocsId: null, googleDocsUrl: null, fileName: null, pdfUrl: null },
-        errorCode: "PERMISSION_DENIED_OR_NOT_SHARED",
-        errorMessage: errMsg,
-        logs,
-        createdAt: timestampIso,
-        updatedAt: timestampIso
-      };
-
-      jobsStore.unshift(failedJob);
-      saveJobs();
-
-      return res.status(403).json({
-        status: "failed",
-        documentType,
-        caseId,
-        clientId,
-        errorCode: "PERMISSION_DENIED_OR_NOT_SHARED",
-        errorMessage: errMsg,
-        failedAt: timestampIso,
-        logs
-      });
-    }
-  } else {
-    // If Service Account is not fully configured, run a high-fidelity simulation
-    const stepsLogs = [
-      { timestamp: nowStr, step: "received", status: "success", message: "Job recebido no barramento GDI de simulação." },
-      { timestamp: nowStr, step: "validating", status: "success", message: "Esquema e regras de conformidade avaliados de forma simulada." },
-      { timestamp: nowStr, step: "auth_checking", status: "success", message: "Modo Simulação: Conectado via Service Account fictícia." },
-      { timestamp: nowStr, step: "docs_checking", status: "success", message: "Docs API: Leitura de cabeçalho do template concluída com sucesso." },
-      { timestamp: nowStr, step: "drive_checking", status: "success", message: "Drive API: Pasta de destino simulada catalogada com êxito." },
-      { timestamp: nowStr, step: "processing", status: "success", message: "Mapeador e placeholders mesclados de forma síncrona." },
-      { timestamp: nowStr, step: "creating_document", status: "success", message: "GDocs API: Novo arquivo gerado a partir do template." },
-      { timestamp: nowStr, step: "replacing_placeholders", status: "success", message: "GDocs API: Marcadores substituídos com êxito no documento." },
-      { timestamp: nowStr, step: "saving_to_drive", status: "success", message: "GDrive API: Documento final preenchido e gravado na pasta destino." }
-    ];
-
-    const finalDocumentId = "1" + Math.random().toString(36).substring(2, 15).toUpperCase();
-    const finalDocUrl = `https://docs.google.com/document/d/${finalDocumentId}/edit`;
-    const finalFileName = `GDI_${documentType.toUpperCase()}_CASE_${caseId}_CLIENT_${clientId}.docx`;
-    const finalPdfUrl = `https://docs.google.com/document/d/${finalDocumentId}/export?format=pdf`;
-
+  try {
+    const result = await executeGdiAutomation(payload);
+    
     const newJob: Job = {
       id: jobId,
       source: payload.source || "Portal BOSS Clientes",
@@ -994,14 +1032,14 @@ app.post("/api/webhook/gdi-job", async (req, res) => {
       destinationFolderUrl,
       payload,
       result: {
-        googleDocsId: finalDocumentId,
-        googleDocsUrl: finalDocUrl,
-        fileName: finalFileName,
-        pdfUrl: finalPdfUrl,
+        googleDocsId: result.googleDocsId,
+        googleDocsUrl: result.googleDocsUrl,
+        fileName: result.fileName,
+        pdfUrl: result.pdfUrl,
       },
       errorCode: null,
       errorMessage: null,
-      logs: [...logs, ...stepsLogs],
+      logs: [...logs, ...result.logs],
       createdAt: timestampIso,
       updatedAt: timestampIso
     };
@@ -1010,7 +1048,7 @@ app.post("/api/webhook/gdi-job", async (req, res) => {
     saveJobs();
 
     if (credentialsConfig.gdiPortalBossWebhookUrl) {
-      console.log(`GDI Simulação: Enviando callback síncrono para ${credentialsConfig.gdiPortalBossWebhookUrl}`);
+      console.log(`GDI: Enviando callback síncrono real para ${credentialsConfig.gdiPortalBossWebhookUrl}`);
     }
 
     return res.json({
@@ -1018,72 +1056,159 @@ app.post("/api/webhook/gdi-job", async (req, res) => {
       documentType,
       caseId,
       clientId,
-      googleDocsId: finalDocumentId,
-      googleDocsUrl: finalDocUrl,
-      fileName: finalFileName,
+      googleDocsId: result.googleDocsId,
+      googleDocsUrl: result.googleDocsUrl,
+      fileName: result.fileName,
       destinationFolderId,
       destinationFolderUrl,
       generatedAt: timestampIso,
       logs: newJob.logs
     });
+  } catch (err: any) {
+    console.error("GDI real execution failed:", err);
+    
+    const errorCode = err.errorCode || "GOOGLE_DOCS_TEMPLATE_COPY_FAILED";
+    const errMsg = err.message || "Ocorreu um erro síncrono desconhecido ao processar integração Google.";
+    
+    logs.push({
+      timestamp: nowStr,
+      step: "failed",
+      status: "failed",
+      message: errMsg,
+      details: err.message
+    });
+
+    const failedJob: Job = {
+      id: jobId,
+      source: payload.source || "Portal BOSS Clientes",
+      target: "GDI",
+      documentType,
+      status: "failed",
+      caseId,
+      clientId,
+      clientType,
+      destinationFolderId,
+      destinationFolderUrl,
+      payload,
+      result: { googleDocsId: null, googleDocsUrl: null, fileName: null, pdfUrl: null },
+      errorCode: errorCode,
+      errorMessage: errMsg,
+      logs,
+      createdAt: timestampIso,
+      updatedAt: timestampIso
+    };
+
+    jobsStore.unshift(failedJob);
+    saveJobs();
+
+    // Determine appropriate status code based on error classification
+    let status = 500;
+    if (errorCode === "SERVICE_ACCOUNT_TEMPLATE_PERMISSION_DENIED" || errorCode === "SERVICE_ACCOUNT_DESTINATION_FOLDER_PERMISSION_DENIED") {
+      status = 430; // Custom category indicator
+    } else if (errorCode === "PAYLOAD_INVALID") {
+      status = 400;
+    }
+
+    return res.status(status).json({
+      status: "failed",
+      documentType,
+      caseId,
+      clientId,
+      errorCode: errorCode,
+      errorMessage: errMsg,
+      failedAt: timestampIso,
+      logs
+    });
   }
 });
 
 // Trigger endpoint from Diagnostic dashboard
-app.post("/api/jobs/trigger", (req, res) => {
+app.post("/api/jobs/trigger", async (req, res) => {
   const payload = req.body;
   if (!payload || !payload.documentType) {
     return res.status(400).json({ error: "Payload inválido para testar" });
   }
 
-  // Self-call webhook simulation securely
   const jobId = "job_" + Math.random().toString(36).substring(2, 11);
   const nowStr = getFormattedNow();
   const timestampIso = new Date().toISOString();
 
-  const finalDocumentId = "1" + Math.random().toString(36).substring(2, 15).toUpperCase();
-  const finalDocUrl = `https://docs.google.com/document/d/${finalDocumentId}/edit`;
-  const finalFileName = `GDI_${payload.documentType.toUpperCase()}_CASE_${payload.caseId || "TEST"}.docx`;
-  
-  const testJob: Job = {
-    id: jobId,
-    source: payload.source || "GDI Diagnostic Engine",
-    target: "GDI",
-    documentType: payload.documentType,
-    status: "success",
-    caseId: payload.caseId || "CASE-DIR-2026",
-    clientId: payload.clientId || "CLI-DIR-2026",
-    clientType: payload.clientType || "PF",
-    destinationFolderId: payload.destinationFolderId || "1H9D48xPlOsM2z7_GDI_FOLDER_ID_DEFAULT",
-    destinationFolderUrl: payload.destinationFolderUrl || "https://drive.google.com/drive/folders/test",
-    payload,
-    result: {
-      googleDocsId: finalDocumentId,
-      googleDocsUrl: finalDocUrl,
-      fileName: finalFileName,
-      pdfUrl: `https://docs.google.com/document/d/${finalDocumentId}/export?format=pdf`
-    },
-    errorCode: null,
-    errorMessage: null,
-    logs: [
-      { timestamp: nowStr, step: "GDI_JOB_RECEIVED", status: "success", message: "GDI: Job recebido através do gatilho do painel de diagnóstico." },
-      { timestamp: nowStr, step: "GDI_PAYLOAD_VALIDATED", status: "success", message: "GDI: Payload validado contra esquema." },
-      { timestamp: nowStr, step: "GDI_GOOGLE_AUTH_CHECKING", status: "success", message: "Autenticação Google de barramento assegurada." },
-      { timestamp: nowStr, step: "GDI_DOCS_CHECKING", status: "success", message: "Conformidade estrutural do Google Docs validada." },
-      { timestamp: nowStr, step: "GDI_DRIVE_CHECKING", status: "success", message: "Pasta de destino catalogada e permissões de escrita auditadas." },
-      { timestamp: nowStr, step: "GDI_PROCESSING", status: "success", message: "Mesclagem de placeholders finalizada." },
-      { timestamp: nowStr, step: "GDI_CREATING_DOCUMENT", status: "success", message: "Cópia limpa do template original confeccionada." },
-      { timestamp: nowStr, step: "GDI_REPLACING_PLACEHOLDERS", status: "success", message: "100% dos marcadores preenchidos." },
-      { timestamp: nowStr, step: "GDI_SAVING_TO_DRIVE", status: "success", message: "Arquivo finalizado e gravado na pasta destino com sucesso." }
-    ],
-    createdAt: timestampIso,
-    updatedAt: timestampIso
-  };
+  // Check if Service Account is configured
+  const hasSa = !!credentialsConfig.gdiGoogleServiceAccountEmail && !!credentialsConfig.gdiGoogleServiceAccountPrivateKey;
+  if (!hasSa) {
+    return res.status(400).json({
+      success: false,
+      error: "O disparador de diagnóstico necessita de uma Service Account real configurada nas credenciais. O barramento de simulação/mock foi removido."
+    });
+  }
 
-  jobsStore.unshift(testJob);
-  saveJobs();
+  try {
+    const result = await executeGdiAutomation(payload);
+    
+    const testJob: Job = {
+      id: jobId,
+      source: payload.source || "GDI Diagnostic Engine",
+      target: "GDI",
+      documentType: payload.documentType,
+      status: "success",
+      caseId: payload.caseId || "CASE-DIR-2026",
+      clientId: payload.clientId || "CLI-DIR-2026",
+      clientType: payload.clientType || "PF",
+      destinationFolderId: payload.destinationFolderId || "",
+      destinationFolderUrl: payload.destinationFolderUrl || "",
+      payload,
+      result: {
+        googleDocsId: result.googleDocsId,
+        googleDocsUrl: result.googleDocsUrl,
+        fileName: result.fileName,
+        pdfUrl: result.pdfUrl
+      },
+      errorCode: null,
+      errorMessage: null,
+      logs: [...result.logs],
+      createdAt: timestampIso,
+      updatedAt: timestampIso
+    };
 
-  res.json({ success: true, job: testJob });
+    jobsStore.unshift(testJob);
+    saveJobs();
+
+    res.json({ success: true, job: testJob });
+  } catch (err: any) {
+    const errorCode = err.errorCode || "GOOGLE_DOCS_TEMPLATE_COPY_FAILED";
+    const errorMessage = err.message || "Erro desconhecido na integração Google.";
+    
+    const testJob: Job = {
+      id: jobId,
+      source: payload.source || "GDI Diagnostic Engine",
+      target: "GDI",
+      documentType: payload.documentType,
+      status: "failed",
+      caseId: payload.caseId || "CASE-DIR-2026",
+      clientId: payload.clientId || "CLI-DIR-2026",
+      clientType: payload.clientType || "PF",
+      destinationFolderId: payload.destinationFolderId || "",
+      destinationFolderUrl: payload.destinationFolderUrl || "",
+      payload,
+      result: { googleDocsId: null, googleDocsUrl: null, fileName: null, pdfUrl: null },
+      errorCode,
+      errorMessage,
+      logs: [{
+        timestamp: nowStr,
+        step: "failed",
+        status: "failed",
+        message: errorMessage,
+        details: err.message
+      }],
+      createdAt: timestampIso,
+      updatedAt: timestampIso
+    };
+
+    jobsStore.unshift(testJob);
+    saveJobs();
+
+    res.status(400).json({ success: false, error: errorMessage, job: testJob });
+  }
 });
 
 
