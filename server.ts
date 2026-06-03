@@ -348,6 +348,17 @@ async function getActiveToken(): Promise<{ token: string; type: 'service_account
 
 // ---------------- API ENDPOINTS ----------------
 
+// GET /api/health -> Simple infrastructure diagnostic health check for server-to-server validation
+app.get("/api/health", (req, res) => {
+  res.json({
+    status: "ok",
+    service: "GDI",
+    mode: "server-to-server",
+    auth: "service_account",
+    webhook: "/api/webhook/gdi-job"
+  });
+});
+
 // Get secure setup config (masks confidential client secrets, private keys, integration keys)
 app.get("/api/config", (req, res) => {
   res.json({
