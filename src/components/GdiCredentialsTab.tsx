@@ -310,16 +310,16 @@ export const GdiCredentialsTab: React.FC<GdiCredentialsTabProps> = ({
   return (
     <div id="gdi-credentials-container" className="space-y-6">
       
-      {/* 1. CARD — CONECTAR GOOGLE WORKSPACE */}
+      {/* 1. CARD — MODO DE CONEXÃO: SERVICE ACCOUNT */}
       <div id="gdi-connect-workspace-card" className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs space-y-4">
         <div className="flex items-center justify-between border-b border-slate-100 pb-3">
           <div className="flex items-center space-x-2.5">
-            <div className="h-8 w-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
+            <div className="h-8 w-8 rounded-lg bg-teal-50 text-teal-600 flex items-center justify-center">
               <ShieldCheck className="h-4.5 w-4.5" />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider font-mono">Conectar Google Workspace</h3>
-              <p className="text-[10px] text-slate-400">Canal de concessão de acessos síncronos da empresa ao GDI</p>
+              <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider font-mono">Modo de conexão: Service Account</h3>
+              <p className="text-[10px] text-slate-400">Integração servidor-servidor GDI ativa e automatizada</p>
             </div>
           </div>
           <div>
@@ -327,28 +327,48 @@ export const GdiCredentialsTab: React.FC<GdiCredentialsTabProps> = ({
           </div>
         </div>
 
-        <p className="text-xs text-slate-500 leading-normal">
-          Para que o GDI funcione de forma síncrona com o Portal BOSS, você precisa conceder permissão de escrita e leitura ao Google Docs e Google Drive. Certifique-se de configurar as credenciais adequadas antes de clicar em conectar.
-        </p>
+        <div className="space-y-2.5">
+          <p className="text-xs text-slate-600 leading-relaxed font-semibold">
+            O GDI opera exclusivamente através de uma conta de serviço (Service Account) dedicada. Para que a automação tenha êxito de escrita e leitura, siga a regra de privilégio abaixo:
+          </p>
+          <div className="bg-slate-50 border border-slate-200 rounded-lg p-3.5 space-y-2.5">
+            <p className="text-[11px] font-bold text-blue-700 uppercase tracking-wider font-mono flex items-center gap-1.5">
+              <Info className="h-3.5 w-3.5" />
+              <span>Instrução de Compartilhamento Obrigatória:</span>
+            </p>
+            <p className="text-xs text-slate-650 leading-relaxed">
+              Compartilhe os templates Google Docs e as pastas Google Drive com a Service Account abaixo.
+            </p>
+            
+            <div className="flex items-center gap-2 mt-2">
+              <div className="bg-white px-3 py-2 rounded border border-slate-300 font-mono text-xs text-slate-750 select-all flex-1 select-all font-semibold overflow-x-auto whitespace-nowrap scrollbar-thin">
+                firebase-adminsdk-fbsvc@planar-granite-495814-r8.iam.gserviceaccount.com
+              </div>
+              <button
+                type="button"
+                id="btn-copy-sa-email"
+                onClick={() => {
+                  navigator.clipboard.writeText('firebase-adminsdk-fbsvc@planar-granite-495814-r8.iam.gserviceaccount.com');
+                  addActionLog('GDI_SA_EMAIL_COPIED', 'success', 'E-mail da Service Account copiado para compartilhamento no Docs/Drive.');
+                  alert('E-mail da Service Account copiado para a área de transferência!');
+                }}
+                className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded cursor-pointer transition flex items-center gap-1 shrink-0"
+                title="Copiar e-mail para compartilhar seus templates ou pastas"
+              >
+                <span>Copiar</span>
+              </button>
+            </div>
+          </div>
+        </div>
 
         {/* Action controls flex box */}
         <div className="flex flex-wrap items-center gap-2.5 pt-1.5">
           <button
             type="button"
-            id="btn-google-auth-connect"
-            onClick={handleConnectGoogle}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg shadow-sm font-mono transition flex items-center gap-1.5 cursor-pointer"
-          >
-            <Globe className="h-4 w-4" />
-            <span>Conectar Google</span>
-          </button>
-
-          <button
-            type="button"
             id="btn-google-auth-verify"
             onClick={handleVerifyConnection}
             disabled={isVerifying}
-            className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 disabled:text-slate-400 text-xs font-semibold rounded-lg font-mono transition flex items-center gap-1.5 cursor-pointer border border-slate-250"
+            className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white disabled:bg-slate-300 text-xs font-semibold rounded-lg font-mono transition flex items-center gap-1.5 cursor-pointer"
           >
             {isVerifying ? (
               <RefreshCw className="h-3.5 w-3.5 animate-spin" />
@@ -356,16 +376,6 @@ export const GdiCredentialsTab: React.FC<GdiCredentialsTabProps> = ({
               <ShieldCheck className="h-3.5 w-3.5" />
             )}
             <span>Verificar conexão</span>
-          </button>
-
-          <button
-            type="button"
-            id="btn-google-auth-revoke"
-            onClick={handleRevokeConnection}
-            className="px-4 py-2 bg-white hover:bg-red-50 text-red-650 hover:text-red-750 text-xs font-medium rounded-lg font-mono transition flex items-center gap-1.5 cursor-pointer border border-slate-200"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-            <span>Revogar conexão</span>
           </button>
         </div>
 
@@ -453,161 +463,36 @@ export const GdiCredentialsTab: React.FC<GdiCredentialsTabProps> = ({
         </div>
 
         {/* Form fields layout */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5 text-xs">
+        <div id="credentials-form-grid" className="grid grid-cols-1 md:grid-cols-2 gap-5 text-xs">
           
-          {/* Col Esquerda - Infos do Google IAM */}
+          {/* Col Esquerda - Infos do Google Service Account */}
           <div className="space-y-4">
-            <h4 className="font-bold text-slate-800 uppercase tracking-wider text-[10px] border-b border-slate-100 pb-1.5">Google Web Authentication (IAM)</h4>
+            <h4 className="font-bold text-slate-800 uppercase tracking-wider text-[10px] border-b border-slate-100 pb-1.5">Google Service Account (Controle IAM)</h4>
             
             <div className="space-y-1">
-              <label className="text-[10px] font-mono font-bold text-slate-400 block uppercase">Client ID (OAuth 2.0)</label>
-              <input 
-                type="text"
-                disabled={!isEditingCredsForm}
-                value={credsForm.gdiGoogleClientId || ''}
-                onChange={(e) => setCredsForm({ ...credsForm, gdiGoogleClientId: e.target.value })}
-                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-700 font-mono disabled:cursor-not-allowed disabled:bg-slate-50/50 text-[11px]"
-                placeholder="Ex: 893122-google-clientid-xyz.apps.googleusercontent.com"
-              />
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-[10px] font-mono font-bold text-slate-400 block uppercase">Client Secret (OAuth 2.0)</label>
-              <div className="relative">
-                <input 
-                  type={showClientSecret ? 'text' : 'password'}
-                  disabled={!isEditingCredsForm}
-                  value={isEditingCredsForm ? clientSecretInput : '••••••••••••••••••••••••••••••••'}
-                  onChange={(e) => setClientSecretInput(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-700 font-mono disabled:cursor-not-allowed disabled:bg-slate-50/50 text-[11px] pr-10"
-                  placeholder={isEditingCredsForm ? "Insira uma nova chave secreta OAuth..." : "Símbolo ocultado"}
-                />
-                {!isEditingCredsForm ? null : (
-                  <button
-                    type="button"
-                    onClick={() => setShowClientSecret(!showClientSecret)}
-                    className="absolute right-2 top-2 text-slate-400 hover:text-slate-600"
-                  >
-                    {showClientSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </button>
-                )}
-              </div>
-            </div>
-
-            <div id="oauth-redirect-uri-wrapper" className="space-y-1.5">
-              <label className="text-[10px] font-mono font-bold text-slate-400 block uppercase">OAuth Redirect URI</label>
-              <div className="flex gap-2">
-                <input 
-                  type="text"
-                  id="input-oauth-redirect-uri"
-                  disabled={!isEditingCredsForm}
-                  value={credsForm.gdiGoogleRedirectUri || ''}
-                  onChange={(e) => setCredsForm({ ...credsForm, gdiGoogleRedirectUri: e.target.value })}
-                  className={`w-full bg-slate-50 border rounded-lg px-3 py-2 text-slate-700 font-mono disabled:cursor-not-allowed text-[11px] ${
-                    credsForm.gdiGoogleRedirectUri && 
-                    (credsForm.gdiGoogleRedirectUri.toLowerCase().includes('secret') || 
-                     credsForm.gdiGoogleRedirectUri.toLowerCase().includes('key') || 
-                     credsForm.gdiGoogleRedirectUri.toLowerCase().includes('token') ||
-                     (!credsForm.gdiGoogleRedirectUri.toLowerCase().startsWith('http://') && !credsForm.gdiGoogleRedirectUri.toLowerCase().startsWith('https://')))
-                      ? 'border-red-400 focus:ring-red-200 focus:border-red-500' 
-                      : 'border-slate-200 focus:ring-blue-100'
-                  }`}
-                  placeholder="Ex: https://[host-gdi]/api/google/callback"
-                />
-                <button
-                  type="button"
-                  id="btn-copy-oauth-redirect-uri"
-                  onClick={() => {
-                    let resolvedUrl = credsForm.gdiGoogleRedirectUri;
-                    if (!resolvedUrl || !resolvedUrl.startsWith('http')) {
-                      resolvedUrl = `${window.location.protocol}//${window.location.host}/api/google/callback`;
-                    } else if (!resolvedUrl.includes('/api/google/')) {
-                      const base = resolvedUrl.endsWith('/') ? resolvedUrl.slice(0, -1) : resolvedUrl;
-                      resolvedUrl = `${base}/api/google/callback`;
-                    }
-                    navigator.clipboard.writeText(resolvedUrl);
-                    addActionLog('GDI_OAUTH_REDIRECT_URI_COPIED', 'success', `Redirect URI copiado para área de transferência: ${resolvedUrl}`);
-                    alert(`Copied Redirect URI: ${resolvedUrl}`);
-                  }}
-                  className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-bold rounded-lg border border-slate-300 cursor-pointer font-mono whitespace-nowrap active:bg-slate-300 transition"
-                  title="Copiar OAuth Redirect URI para colar na consola de credenciais Google"
-                >
-                  Copiar OAuth Redirect URI
-                </button>
-              </div>
-
-              {/* Real-time Validation Banners */}
-              {credsForm.gdiGoogleRedirectUri && (() => {
-                const lower = credsForm.gdiGoogleRedirectUri.toLowerCase();
-                const hasSecret = lower.includes('secret') || lower.includes('key') || lower.includes('token');
-                const isUrl = lower.startsWith('http://') || lower.startsWith('https://');
-                
-                if (hasSecret) {
-                  return (
-                    <p className="text-[10.5px] text-red-650 font-bold font-mono">
-                      ⚠️ ERRO CRÍTICO: Chave secreta ou token detectado! Chave secreta NÃO PODE ser usada como Redirect URI!
-                    </p>
-                  );
-                }
-                if (!isUrl) {
-                  return (
-                    <p className="text-[10.5px] text-red-600 font-mono">
-                      ⚠️ ERRO: O Redirect URI deve ser uma URL válida e começar com http:// ou https://
-                    </p>
-                  );
-                }
-                return (
-                  <p className="text-[10.5px] text-emerald-600 font-mono font-bold">
-                    ✓ URL válida e aceita para Google OAuth.
-                  </p>
-                );
-              })()}
-              <p className="text-[10px] text-slate-400 italic font-sans leading-normal">
-                Esse endereço precisa ser idêntico ao cadastrado no campo "URIs de redirecionamento autorizados" da sua credencial OAuth 2.0 no Google Cloud Console.
-              </p>
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-[10px] font-mono font-bold text-slate-400 block uppercase">Conta de Serviço (E-mail IAM)</label>
+              <label className="text-[10px] font-mono font-bold text-slate-400 block uppercase">E-mail da Service Account (Google Service Account Email)</label>
               <input 
                 type="text"
                 disabled={!isEditingCredsForm}
                 value={credsForm.gdiGoogleServiceAccountEmail || ''}
                 onChange={(e) => setCredsForm({ ...credsForm, gdiGoogleServiceAccountEmail: e.target.value })}
                 className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-700 font-mono disabled:cursor-not-allowed text-[11px]"
-                placeholder="Ex: gdocs-sa@empresa-projeto.iam.gserviceaccount.com"
+                placeholder="Ex: firebase-adminsdk-fbsvc@planar-granite-495814-r8.iam.gserviceaccount.com"
               />
             </div>
 
             <div className="space-y-1">
-              <label className="text-[10px] font-mono font-bold text-slate-400 block uppercase">Chave Privada Conta Serviço (Service Account Private Key)</label>
+              <label className="text-[10px] font-mono font-bold text-slate-400 block uppercase">Chave Privada da Service Account (Private Key)</label>
               <div className="relative">
                 <textarea 
-                  rows={3}
+                  rows={4}
                   disabled={!isEditingCredsForm}
                   value={isEditingCredsForm ? privateKeyInput : '-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDg4\n•••••••••••••••••••••••••••••••••••••••••••••••••••••\n-----END PRIVATE KEY-----'}
                   onChange={(e) => setPrivateKeyInput(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-700 font-mono disabled:cursor-not-allowed text-[11px] select-text"
-                  placeholder={isEditingCredsForm ? "Cole aqui a chave privada JSON do seu Service Account..." : "Mascarado por segurança física do repositório."}
+                  placeholder={isEditingCredsForm ? "Cole a chave privada JSON do seu Service Account..." : "Mascarado por segurança física do repositório."}
                 />
               </div>
-            </div>
-          </div>
-
-          {/* Col Direita - API Key e Config Canal BOSS */}
-          <div className="space-y-4">
-            <h4 className="font-bold text-slate-800 uppercase tracking-wider text-[10px] border-b border-slate-100 pb-1.5">Conexões Portal BOSS e Tokens</h4>
-            
-            <div className="space-y-1">
-              <label className="text-[10px] font-mono font-bold text-slate-400 block uppercase">Chave Geral Conexão (Google Developer API Key)</label>
-              <input 
-                type="text"
-                disabled={!isEditingCredsForm}
-                value={credsForm.gdiGoogleApiKey || ''}
-                onChange={(e) => setCredsForm({ ...credsForm, gdiGoogleApiKey: e.target.value })}
-                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-700 font-mono disabled:cursor-not-allowed text-[11px]"
-                placeholder="Ex: AIzaSyD92_jZba_xyz2"
-              />
             </div>
 
             <div className="space-y-1">
@@ -618,7 +503,24 @@ export const GdiCredentialsTab: React.FC<GdiCredentialsTabProps> = ({
                 value={credsForm.gdiGoogleProjectId || ''}
                 onChange={(e) => setCredsForm({ ...credsForm, gdiGoogleProjectId: e.target.value })}
                 className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-700 font-mono disabled:cursor-not-allowed text-[11px]"
-                placeholder="Ex: portal-boss-cloud-2026"
+                placeholder="Ex: planar-granite-495814-r8"
+              />
+            </div>
+          </div>
+
+          {/* Col Direita - API Key e Config Canal BOSS */}
+          <div className="space-y-4">
+            <h4 className="font-bold text-slate-800 uppercase tracking-wider text-[10px] border-b border-slate-100 pb-1.5">Segurança do Portal BOSS e Tokens</h4>
+            
+            <div className="space-y-1">
+              <label className="text-[10px] font-mono font-bold text-slate-400 block uppercase">Google Developer API Key (Opcional)</label>
+              <input 
+                type="text"
+                disabled={!isEditingCredsForm}
+                value={credsForm.gdiGoogleApiKey || ''}
+                onChange={(e) => setCredsForm({ ...credsForm, gdiGoogleApiKey: e.target.value })}
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-700 font-mono disabled:cursor-not-allowed text-[11px]"
+                placeholder="Ex: AIzaSyD92_jZba_xyz2"
               />
             </div>
 
