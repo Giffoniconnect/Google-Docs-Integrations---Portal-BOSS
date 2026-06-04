@@ -393,10 +393,24 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
   };
 
   // Custom GDI raw Payload state
-  const [rawPayloadText, setRawPayloadText] = useState<string>(() => {
-    const defaultM = getTechnicalPayloadForDoc(card.documentType, (card.category || 'PF').toUpperCase() as 'PF' | 'PJ');
-    return JSON.stringify(defaultM, null, 2);
-  });
+  const [rawPayloadText, setRawPayloadText] = useState<string>("");
+
+  // Sync rawPayloadText with the last matching real job received from jobsQueue if rawPayloadText is currently empty
+  useEffect(() => {
+    if (!rawPayloadText && jobsQueue && jobsQueue.length > 0) {
+      const matchingJob = [...jobsQueue].reverse().find((j: any) => {
+        if (!j) return false;
+        const docType = j.documentType || (j.payload && j.payload.documentType) || '';
+        const canonicalJobType = docType.toLowerCase().replace(/_/g, '-');
+        const canonicalCardId = card.id.toLowerCase().replace(/_/g, '-');
+        return canonicalJobType === canonicalCardId;
+      });
+
+      if (matchingJob && matchingJob.payload) {
+        setRawPayloadText(JSON.stringify(matchingJob.payload, null, 2));
+      }
+    }
+  }, [jobsQueue, card.id, rawPayloadText]);
 
   // Dynamic calculated parameters based on Portal BOSS Mapper
   let parsedPayload: PortalBossPayload = {};
@@ -639,6 +653,7 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
             googleDriveStatus={googleDriveStatus}
             setGoogleDriveStatus={setGoogleDriveStatus}
             googleAuthStatus={googleAuthStatus}
+            dbConfig={dbConfig}
             jobsQueue={jobsQueue}
             userActionLogs={userActionLogs}
             triggerGoogleAuthDiagnostics={triggerGoogleAuthDiagnostics}

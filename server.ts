@@ -45,6 +45,11 @@ interface Job {
   logs: any[];
   createdAt: string;
   updatedAt: string;
+  rawPayload?: any;
+  normalizedPayload?: any;
+  headersMasked?: Record<string, string>;
+  receivedAt?: string;
+  processedAt?: string;
 }
 
 const PORT = 3000;
@@ -148,6 +153,22 @@ try {
   }
 } catch (e) {
   console.error("Templates load error", e);
+}
+
+// Guarantee procuracao-pf baseline template definition is present
+if (!templatesConfig["procuracao-pf"]) {
+  templatesConfig["procuracao-pf"] = {
+    templateName: "Modelo da Procuração PF",
+    templateGoogleDocsUrl: "https://docs.google.com/document/d/16k_n_BTdf8wTCG8CK4T2TyAT93o5qrmZqjbROtrBqzk/edit",
+    templateGoogleDocsId: "16k_n_BTdf8wTCG8CK4T2TyAT93o5qrmZqjbROtrBqzk",
+    templatePdfReferenceUrl: "https://drive.google.com/drive/u/0/folders/1fhMk2RMwEM7RlDCEOlKl5CsEjujX5zMJ",
+    templateStatus: "validado",
+    updatedAt: "2026-06-02T18:00:00Z",
+    updatedBy: "SISTEMA_GDI"
+  };
+  try {
+    fs.writeFileSync(TEMPLATES_FILE, JSON.stringify(templatesConfig, null, 2));
+  } catch (err) {}
 }
 
 // Token storage definition
@@ -348,14 +369,36 @@ async function getActiveToken(): Promise<{ token: string; type: 'service_account
 
 // ---------------- API ENDPOINTS ----------------
 
-// GET /api/health -> Simple infrastructure diagnostic health check for server-to-server validation
+// GET /health -> Root health check JSON return
+app.get("/health", (req, res) => {
+  res.json({
+    success: true,
+    status: "operational",
+    service: "gdi",
+    webhook: "/api/webhook/gdi-job",
+    auth: "service_account"
+  });
+});
+
+// GET /api/health -> API health check JSON return
 app.get("/api/health", (req, res) => {
   res.json({
-    status: "ok",
-    service: "GDI",
-    mode: "server-to-server",
-    auth: "service_account",
-    webhook: "/api/webhook/gdi-job"
+    success: true,
+    status: "operational",
+    service: "gdi",
+    webhook: "/api/webhook/gdi-job",
+    auth: "service_account"
+  });
+});
+
+// GET /api/webhook/gdi-job -> Info about webhook state/availability
+app.get("/api/webhook/gdi-job", (req, res) => {
+  res.json({
+    success: true,
+    status: "ready",
+    service: "gdi",
+    message: "Endpoint GDI ativo. Use POST com X-BOSS-Google-Docs-Integration-Key para gerar documentos.",
+    expectedMethod: "POST"
   });
 });
 
@@ -662,15 +705,43 @@ class GdiAutomationError extends Error {
   }
 }
 
+// Map various source documentTypes to GDI canonical names with dashes
+function canonicalDocumentType(value: string): string {
+  const map: Record<string, string> = {
+    "procuracao_pf": "procuracao-pf",
+    "declaracao_pobreza_pf": "declaracao-pobreza-pf",
+    "contrato_honorarios_pf": "contrato-honorarios-pf",
+    "primeiro_atendimento_pf": "primeiro-atendimento-pf",
+    "procuracao_pj": "procuracao-pj",
+    "declaracao_pobreza_pj": "declaracao-pobreza-pj",
+    "contrato_honorarios_pj": "contrato-honorarios-pj",
+    "primeiro_atendimento_pj": "primeiro-atendimento-pj"
+  };
+
+  return map[value] || value.replace(/_/g, "-");
+}
+
 // Helper to execute GDI Automation via standard REST APIs of Google Docs and Drive
 async function executeGdiAutomation(
   payload: any
 ): Promise<{ googleDocsId: string; googleDocsUrl: string; fileName: string; pdfUrl: string; logs: any[] }> {
+  // Validate Service Account config presence
+  const hasSa = !!credentialsConfig.gdiGoogleServiceAccountEmail && !!credentialsConfig.gdiGoogleServiceAccountPrivateKey;
+  if (!hasSa) {
+    throw new GdiAutomationError(
+      "SERVICE_ACCOUNT_NOT_CONFIGURED",
+      "A Service Account não está configurada no GDI síncrono. Cadastre o e-mail e chave privada nas credenciais."
+    );
+  }
+
   // Parse and normalize the payload
   const { normalized, validation } = normalizePortalBossPayload(payload);
   if (!validation.isValid) {
+    const errCode = validation.errorType === 'GDI_PF_REQUIRED_FIELD_MISSING' || validation.errorType === 'GDI_PJ_REQUIRED_FIELD_MISSING'
+      ? "PAYLOAD_INVALID"
+      : (validation.errorType === "CLIENT_DATA_MISSING" ? "CLIENT_DATA_MISSING" : "PAYLOAD_INVALID");
     throw new GdiAutomationError(
-      "PAYLOAD_INVALID",
+      errCode,
       `Dados inválidos no payload: ${validation.errorMessage || "Erro de validação"}`
     );
   }
@@ -680,25 +751,15 @@ async function executeGdiAutomation(
   const caseId = normalized.caseId;
   const clientId = normalized.clientId;
 
-  // Find template ID
-  const map: Record<string, string> = {
-    "procuracao-pf": "procuracao-pf",
-    "declaracao-pobreza-pf": "declaracao-pobreza-pf",
-    "contrato-honorarios-pf": "contrato-honorarios-pf",
-    "primeiro-atendimento-pf": "primeiro-atendimento-pf",
-    "procuracao-pj": "procuracao-pj",
-    "declaracao-pobreza-pj": "declaracao-pobreza-pj",
-    "contrato-honorarios-pj": "contrato-honorarios-pj",
-    "primeiro-atendimento-pj": "primeiro-atendimento-pj"
-  };
-  const cardId = map[documentType] || documentType;
+  // Find template ID by resolving the type to its canonical format
+  const cardId = canonicalDocumentType(documentType);
   const config = templatesConfig[cardId];
   const templateId = config?.templateGoogleDocsId ? config.templateGoogleDocsId.trim() : "";
 
   if (!templateId) {
     throw new GdiAutomationError(
-      "SERVICE_ACCOUNT_TEMPLATE_PERMISSION_DENIED",
-      `Template mestre não configurado ou ID do template vazio para o tipo de documento "${documentType}".`
+      "TEMPLATE_NOT_CONFIGURED",
+      `Template mestre não configurado ou ID do template vazio para o tipo de documento "${documentType}" (canonical: "${cardId}").`
     );
   }
 
@@ -893,6 +954,18 @@ async function executeGdiAutomation(
   };
 }
 
+function updateJobState(jobId: string, updates: Partial<Job>) {
+  const index = jobsStore.findIndex(j => j.id === jobId);
+  if (index !== -1) {
+    jobsStore[index] = {
+      ...jobsStore[index],
+      ...updates,
+      updatedAt: new Date().toISOString()
+    };
+    saveJobs();
+  }
+}
+
 // Webhook Receptor (Section 7, 8, 9)
 app.post("/api/webhook/gdi-job", async (req, res) => {
   const gdiKeyHeader = req.headers["x-boss-google-docs-integration-key"];
@@ -900,39 +973,134 @@ app.post("/api/webhook/gdi-job", async (req, res) => {
   const nowStr = getFormattedNow();
   const timestampIso = new Date().toISOString();
 
+  // Mask headers
+  const headersMasked: Record<string, string> = {};
+  for (const [key, val] of Object.entries(req.headers)) {
+    if (typeof val === "string") {
+      if (key.toLowerCase().includes("key") || key.toLowerCase().includes("secret") || key.toLowerCase().includes("authorization") || key.toLowerCase().includes("token")) {
+        headersMasked[key] = val.slice(0, 4) + "... [MASKED] ...";
+      } else {
+        headersMasked[key] = val;
+      }
+    }
+  }
+
+  const documentType = payload?.documentType || "";
+  const caseId = payload?.caseId || "";
+  const clientId = payload?.clientId || "";
+
+  // Resolve clientType with fallbacks
+  let rawClientType = (payload?.clientType || "").toUpperCase();
+  if (!rawClientType) {
+    if (documentType.toLowerCase().includes("pf") || (payload?.payload && payload.payload.cpf)) {
+      rawClientType = "PF";
+    } else if (documentType.toLowerCase().includes("pj") || (payload?.payload && payload.payload.cnpj)) {
+      rawClientType = "PJ";
+    }
+  }
+  const clientType = rawClientType;
+
+  const destinationFolderId = payload?.destinationFolderId || "";
+  const destinationFolderUrl = payload?.destinationFolderUrl || "";
+
+  // Sane flat mapping of payload.payload to clientRawData if clientRawData doesn't exist
+  if (payload && !payload.clientRawData && payload.payload) {
+    payload.clientRawData = {
+      pfData: payload.payload,
+      pfDadosPessoais: payload.payload,
+      bancarioData: payload.payload,
+      bancarioDadosBancarios: payload.payload,
+      acessoSistema: payload.payload,
+      pjData: payload.payload,
+      pjDadosEmpresa: payload.payload,
+      socioData: payload.payload,
+      socioDadosPessoais: payload.payload
+    };
+  }
+
+  const jobId = "job_" + Math.random().toString(36).substring(2, 11);
+
+  // 1. Create and Save "received" State Job FIRST before security validation
+  const initialJob: Job = {
+    id: jobId,
+    source: payload?.source || "Portal BOSS Clientes",
+    target: "GDI",
+    documentType,
+    status: "received",
+    caseId,
+    clientId,
+    clientType,
+    destinationFolderId,
+    destinationFolderUrl,
+    payload,
+    result: { googleDocsId: null, googleDocsUrl: null, fileName: null, pdfUrl: null },
+    errorCode: null,
+    errorMessage: null,
+    logs: [{ timestamp: nowStr, step: "GDI_JOB_RECEIVED", status: "success", message: "GDI: Job de automação documental recebido. Status: received." }],
+    createdAt: timestampIso,
+    updatedAt: timestampIso,
+    rawPayload: payload,
+    normalizedPayload: null,
+    headersMasked,
+    receivedAt: timestampIso,
+    processedAt: ""
+  };
+
+  jobsStore.unshift(initialJob);
+  saveJobs();
+
   // Validate integrated securely with X-BOSS-Google-Docs-Integration-Key
   if (!gdiKeyHeader || gdiKeyHeader !== credentialsConfig.gdiIntegrationKey) {
     console.error("GDI security failure: Unauthorized connection header attempt.");
-    return res.status(401).json({
+    
+    const failedLogs = [
+      ...initialJob.logs,
+      { timestamp: nowStr, step: "GDI_SECURITY_FAILED", status: "failed", message: "Chave de integração indevida ou cabeçalho X-BOSS-Google-Docs-Integration-Key inválido." }
+    ];
+
+    updateJobState(jobId, {
       status: "failed",
       errorCode: "UNAUTHORIZED_INTEGRATION_KEY",
       errorMessage: "Chave de integração indevida ou cabeçalho X-BOSS-Google-Docs-Integration-Key inválido.",
-      failedAt: timestampIso
+      logs: failedLogs,
+      processedAt: new Date().toISOString()
+    });
+
+    return res.status(401).json({
+      success: false,
+      status: "failed",
+      errorCode: "UNAUTHORIZED_INTEGRATION_KEY",
+      errorMessage: "Chave de integração indevida ou cabeçalho X-BOSS-Google-Docs-Integration-Key inválido.",
+      logs: [{ timestamp: nowStr, step: "GDI_SECURITY_FAILED", status: "failed", message: "Chave de integração inválida" }]
     });
   }
 
-  const logs: any[] = [];
-  logs.push({ timestamp: nowStr, step: "GDI_JOB_RECEIVED", status: "success", message: "GDI: Job de automação documental recebido com autenticação homologada." });
-  logs.push({ timestamp: nowStr, step: "GDI_PAYLOAD_VALIDATED", status: "success", message: "GDI: Payload validado contra esquema de normalização." });
+  // 2. Validate Phase -> Transition to validating
+  const localLogs = [...initialJob.logs, { timestamp: getFormattedNow(), step: "GDI_JOB_VALIDATING", status: "success", message: "GDI: Iniciando normalização e validação de payload. Status: validating." }];
+  updateJobState(jobId, {
+    status: "validating",
+    logs: localLogs
+  });
 
-  // Simple quick validations
   if (!payload || Object.keys(payload).length === 0) {
-    const errBody = {
+    const errMsg = "O payload enviado está inteiramente vazio.";
+    const emptyLogs = [...localLogs, { timestamp: getFormattedNow(), step: "GDI_PAYLOAD_EMPTY", status: "failed", message: errMsg }];
+    updateJobState(jobId, {
       status: "failed",
       errorCode: "PAYLOAD_EMPTY",
-      errorMessage: "O payload enviado está inteiramente vazio.",
-      failedAt: timestampIso,
-      logs: [{ timestamp: nowStr, step: "GDI_PAYLOAD_EMPTY", status: "failed", message: "Erro: Payload de entrada sem dados." }]
-    };
-    return res.status(400).json(errBody);
-  }
+      errorMessage: errMsg,
+      logs: emptyLogs,
+      processedAt: new Date().toISOString()
+    });
 
-  const documentType = payload.documentType || "";
-  const caseId = payload.caseId || "";
-  const clientId = payload.clientId || "";
-  const clientType = payload.clientType || "";
-  const destinationFolderId = payload.destinationFolderId || "";
-  const destinationFolderUrl = payload.destinationFolderUrl || "";
+    return res.status(400).json({
+      success: false,
+      status: "failed",
+      errorCode: "PAYLOAD_EMPTY",
+      errorMessage: errMsg,
+      logs: emptyLogs
+    });
+  }
 
   if (!documentType || !caseId || !clientId) {
     const missing = [];
@@ -940,131 +1108,66 @@ app.post("/api/webhook/gdi-job", async (req, res) => {
     if (!caseId) missing.push("caseId");
     if (!clientId) missing.push("clientId");
 
-    const errBody = {
+    const errMsg = `Campos essenciais mínimos ausentes no payload: [${missing.join(", ")}]`;
+    const valFailedLogs = [...localLogs, { timestamp: getFormattedNow(), step: "GDI_VAL_FAILED", status: "failed", message: `Faltam campos: ${missing.join(", ")}` }];
+    updateJobState(jobId, {
       status: "failed",
-      documentType,
-      caseId,
-      clientId,
       errorCode: "PAYLOAD_INVALID",
-      errorMessage: `Campos essenciais mínimos ausentes no payload: [${missing.join(", ")}]`,
-      failedAt: timestampIso,
-      logs: [{ timestamp: nowStr, step: "GDI_VAL_FAILED", status: "failed", message: "Validação síncrona mal sucedida: Faltam campos principais no payload." }]
-    };
-
-    // Store failed job in history for diagnostics visibility
-    const failedJob: Job = {
-      id: "job_" + Math.random().toString(36).substring(2, 11),
-      source: "Portal BOSS Clientes",
-      target: "GDI",
-      documentType,
-      status: "payload_invalid",
-      caseId,
-      clientId,
-      clientType,
-      destinationFolderId,
-      destinationFolderUrl,
-      payload,
-      result: { googleDocsId: null, googleDocsUrl: null, fileName: null, pdfUrl: null },
-      errorCode: "PAYLOAD_INVALID",
-      errorMessage: `Campos essenciais mínimos ausentes no payload: [${missing.join(", ")}]`,
-      logs: errBody.logs,
-      createdAt: timestampIso,
-      updatedAt: timestampIso
-    };
-    jobsStore.unshift(failedJob);
-    saveJobs();
-
-    return res.status(400).json(errBody);
-  }
-
-  // Create real Job process workflow
-  const jobId = "job_" + Math.random().toString(36).substring(2, 11);
-
-  // Check if Service Account email and private key are configured
-  const hasSa = !!credentialsConfig.gdiGoogleServiceAccountEmail && !!credentialsConfig.gdiGoogleServiceAccountPrivateKey;
-  
-  if (!hasSa) {
-    const errMsg = "A Service Account não está configurada no GDI síncrono. Cadastre o e-mail e chave privada nas credenciais.";
-    logs.push({
-      timestamp: nowStr,
-      step: "failed",
-      status: "failed",
-      message: errMsg
-    });
-
-    const failedJob: Job = {
-      id: jobId,
-      source: payload.source || "Portal BOSS Clientes",
-      target: "GDI",
-      documentType,
-      status: "failed",
-      caseId,
-      clientId,
-      clientType,
-      destinationFolderId,
-      destinationFolderUrl,
-      payload,
-      result: { googleDocsId: null, googleDocsUrl: null, fileName: null, pdfUrl: null },
-      errorCode: "SERVICE_ACCOUNT_NOT_CONFIGURED",
       errorMessage: errMsg,
-      logs,
-      createdAt: timestampIso,
-      updatedAt: timestampIso
-    };
-
-    jobsStore.unshift(failedJob);
-    saveJobs();
+      logs: valFailedLogs,
+      processedAt: new Date().toISOString()
+    });
 
     return res.status(400).json({
+      success: false,
       status: "failed",
-      documentType,
-      caseId,
-      clientId,
-      errorCode: "SERVICE_ACCOUNT_NOT_CONFIGURED",
+      errorCode: "PAYLOAD_INVALID",
       errorMessage: errMsg,
-      failedAt: timestampIso,
-      logs
+      logs: valFailedLogs
     });
   }
+
+  // 3. Normalized Extraction -> Transition to processing
+  const processingLogs = [...localLogs, { timestamp: getFormattedNow(), step: "GDI_JOB_PROCESSING", status: "success", message: "GDI: Validação concluída. Iniciando processamento do documento. Status: processing." }];
+  
+  let normalizedPayload: any = null;
+  try {
+    const normResult = normalizePortalBossPayload(payload);
+    if (normResult && normResult.validation.isValid) {
+      normalizedPayload = normResult.normalized;
+    }
+  } catch (e) {
+    console.error("Normalizer error:", e);
+  }
+
+  updateJobState(jobId, {
+    status: "processing",
+    normalizedPayload,
+    logs: processingLogs
+  });
 
   try {
     const result = await executeGdiAutomation(payload);
     
-    const newJob: Job = {
-      id: jobId,
-      source: payload.source || "Portal BOSS Clientes",
-      target: "GDI",
-      documentType,
+    // 4. Success State -> Transition to success
+    const successLogs = [...processingLogs, ...result.logs, { timestamp: getFormattedNow(), step: "GDI_JOB_COMPLETED", status: "success", message: "GDI: Documento gerado com sucesso. Status: success." }];
+    updateJobState(jobId, {
       status: "success",
-      caseId,
-      clientId,
-      clientType,
-      destinationFolderId,
-      destinationFolderUrl,
-      payload,
       result: {
         googleDocsId: result.googleDocsId,
         googleDocsUrl: result.googleDocsUrl,
         fileName: result.fileName,
         pdfUrl: result.pdfUrl,
       },
-      errorCode: null,
-      errorMessage: null,
-      logs: [...logs, ...result.logs],
-      createdAt: timestampIso,
-      updatedAt: timestampIso
-    };
-
-    jobsStore.unshift(newJob);
-    saveJobs();
-
-    if (credentialsConfig.gdiPortalBossWebhookUrl) {
-      console.log(`GDI: Enviando callback síncrono real para ${credentialsConfig.gdiPortalBossWebhookUrl}`);
-    }
+      logs: successLogs,
+      processedAt: new Date().toISOString()
+    });
 
     return res.json({
+      success: true,
       status: "success",
       documentType,
+      canonicalDocumentType: canonicalDocumentType(documentType),
       caseId,
       clientId,
       googleDocsId: result.googleDocsId,
@@ -1072,65 +1175,165 @@ app.post("/api/webhook/gdi-job", async (req, res) => {
       fileName: result.fileName,
       destinationFolderId,
       destinationFolderUrl,
-      generatedAt: timestampIso,
-      logs: newJob.logs
+      logs: successLogs,
+      payload
     });
   } catch (err: any) {
-    console.error("GDI real execution failed:", err);
-    
+    console.error("GDI execution error in webhook:", err);
     const errorCode = err.errorCode || "GOOGLE_DOCS_TEMPLATE_COPY_FAILED";
     const errMsg = err.message || "Ocorreu um erro síncrono desconhecido ao processar integração Google.";
     
-    logs.push({
-      timestamp: nowStr,
+    // 5. Failed State -> Transition to failed
+    const failedLogs = [...processingLogs, {
+      timestamp: getFormattedNow(),
       step: "failed",
       status: "failed",
       message: errMsg,
       details: err.message
-    });
+    }];
 
-    const failedJob: Job = {
-      id: jobId,
-      source: payload.source || "Portal BOSS Clientes",
-      target: "GDI",
-      documentType,
+    updateJobState(jobId, {
       status: "failed",
-      caseId,
-      clientId,
-      clientType,
-      destinationFolderId,
-      destinationFolderUrl,
-      payload,
-      result: { googleDocsId: null, googleDocsUrl: null, fileName: null, pdfUrl: null },
       errorCode: errorCode,
       errorMessage: errMsg,
-      logs,
-      createdAt: timestampIso,
-      updatedAt: timestampIso
-    };
+      logs: failedLogs,
+      processedAt: new Date().toISOString()
+    });
 
-    jobsStore.unshift(failedJob);
-    saveJobs();
-
-    // Determine appropriate status code based on error classification
-    let status = 500;
+    let statusCode = 500;
     if (errorCode === "SERVICE_ACCOUNT_TEMPLATE_PERMISSION_DENIED" || errorCode === "SERVICE_ACCOUNT_DESTINATION_FOLDER_PERMISSION_DENIED") {
-      status = 430; // Custom category indicator
-    } else if (errorCode === "PAYLOAD_INVALID") {
-      status = 400;
+      statusCode = 430;
+    } else if (errorCode === "PAYLOAD_INVALID" || errorCode === "SERVICE_ACCOUNT_NOT_CONFIGURED" || errorCode === "TEMPLATE_NOT_CONFIGURED" || errorCode === "CLIENT_DATA_MISSING") {
+      statusCode = 400;
     }
 
-    return res.status(status).json({
+    return res.status(statusCode).json({
+      success: false,
       status: "failed",
-      documentType,
-      caseId,
-      clientId,
-      errorCode: errorCode,
+      errorCode,
       errorMessage: errMsg,
-      failedAt: timestampIso,
-      logs
+      logs: failedLogs
     });
   }
+});
+
+// Webhook Dry Run Receptor (Tarefa 4)
+app.post("/api/webhook/gdi-job/dry-run", async (req, res) => {
+  const gdiKeyHeader = req.headers["x-boss-google-docs-integration-key"];
+  const payload = req.body;
+  const nowStr = getFormattedNow();
+  const timestampIso = new Date().toISOString();
+
+  // Validate security integration key
+  if (!gdiKeyHeader || gdiKeyHeader !== credentialsConfig.gdiIntegrationKey) {
+    console.error("GDI dry-run security failure: Unauthorized connection header attempt.");
+    return res.status(401).json({
+      success: false,
+      status: "failed",
+      errorCode: "UNAUTHORIZED_INTEGRATION_KEY",
+      errorMessage: "Chave de integração indevida ou cabeçalho X-BOSS-Google-Docs-Integration-Key inválido.",
+      logs: [{ timestamp: nowStr, step: "GDI_SECURITY_FAILED", status: "failed", message: "Chave de integração de dry-run inválida" }]
+    });
+  }
+
+  // Mask headers
+  const headersMasked: Record<string, string> = {};
+  for (const [key, val] of Object.entries(req.headers)) {
+    if (typeof val === "string") {
+      if (key.toLowerCase().includes("key") || key.toLowerCase().includes("secret") || key.toLowerCase().includes("authorization") || key.toLowerCase().includes("token")) {
+        headersMasked[key] = val.slice(0, 4) + "... [MASKED] ...";
+      } else {
+        headersMasked[key] = val;
+      }
+    }
+  }
+
+  const documentType = payload?.documentType || "";
+  const caseId = payload?.caseId || "";
+  const clientId = payload?.clientId || "";
+
+  // Resolve clientType with fallbacks
+  let rawClientType = (payload?.clientType || "").toUpperCase();
+  if (!rawClientType) {
+    if (documentType.toLowerCase().includes("pf") || (payload?.payload && payload.payload.cpf)) {
+      rawClientType = "PF";
+    } else if (documentType.toLowerCase().includes("pj") || (payload?.payload && payload.payload.cnpj)) {
+      rawClientType = "PJ";
+    }
+  }
+  const clientType = rawClientType;
+
+  const destinationFolderId = payload?.destinationFolderId || "";
+  const destinationFolderUrl = payload?.destinationFolderUrl || "";
+
+  // Sane flat mapping of payload.payload to clientRawData if clientRawData doesn't exist
+  if (payload && !payload.clientRawData && payload.payload) {
+    payload.clientRawData = {
+      pfData: payload.payload,
+      pfDadosPessoais: payload.payload,
+      bancarioData: payload.payload,
+      bancarioDadosBancarios: payload.payload,
+      acessoSistema: payload.payload,
+      pjData: payload.payload,
+      pjDadosEmpresa: payload.payload,
+      socioData: payload.payload,
+      socioDadosPessoais: payload.payload
+    };
+  }
+
+  const jobId = "job_dry_" + Math.random().toString(36).substring(2, 11);
+
+  // Parse and normalize the payload to check
+  let normalizedPayload: any = null;
+  let validationResult: any = null;
+  try {
+    const normResult = normalizePortalBossPayload(payload);
+    normalizedPayload = normResult?.normalized || null;
+    validationResult = normResult?.validation || null;
+  } catch (e) {
+    console.error("Normalizer error in dry-run:", e);
+  }
+
+  // Register job with status = dry_run_received
+  const dryRunJob: Job = {
+    id: jobId,
+    source: payload?.source || "Portal BOSS Clientes",
+    target: "GDI",
+    documentType,
+    status: "dry_run_received",
+    caseId,
+    clientId,
+    clientType,
+    destinationFolderId,
+    destinationFolderUrl,
+    payload,
+    result: { googleDocsId: null, googleDocsUrl: null, fileName: null, pdfUrl: null },
+    errorCode: validationResult && !validationResult.isValid ? (validationResult.errorType || "PAYLOAD_INVALID") : null,
+    errorMessage: validationResult && !validationResult.isValid ? validationResult.errorMessage : null,
+    logs: [
+      { timestamp: nowStr, step: "GDI_JOB_RECEIVED_DRY_RUN", status: "success", message: "GDI: Job de automação documental recebido em modo dry-run. Status: dry_run_received." },
+      { timestamp: nowStr, step: "GDI_JOB_DRY_RUN", status: validationResult && !validationResult.isValid ? "failed" : "success", message: validationResult && !validationResult.isValid ? `GDI (Dry-Run): Validação de payload falhou: ${validationResult.errorMessage}` : "GDI (Dry-Run): Payload validado com sucesso contra o esquema de normalização." }
+    ],
+    createdAt: timestampIso,
+    updatedAt: timestampIso,
+    rawPayload: payload,
+    normalizedPayload,
+    headersMasked,
+    receivedAt: timestampIso,
+    processedAt: timestampIso
+  };
+
+  jobsStore.unshift(dryRunJob);
+  saveJobs();
+
+  return res.json({
+    success: true,
+    status: "dry_run_received",
+    service: "gdi",
+    jobId,
+    message: "Payload recebido pelo GDI em modo dry-run. Nenhum documento foi gerado.",
+    validation: validationResult || { isValid: true }
+  });
 });
 
 // Trigger endpoint from Diagnostic dashboard
@@ -1220,6 +1423,16 @@ app.post("/api/jobs/trigger", async (req, res) => {
 
     res.status(400).json({ success: false, error: errorMessage, job: testJob });
   }
+});
+
+// Fallback JSON for any unmatched api routes
+app.all("/api/*", (req, res) => {
+  res.status(404).json({
+    success: false,
+    status: "failed",
+    errorCode: "GDI_API_ROUTE_NOT_FOUND",
+    errorMessage: "Rota API não encontrada no GDI."
+  });
 });
 
 

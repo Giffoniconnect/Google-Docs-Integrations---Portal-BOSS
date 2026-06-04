@@ -7,6 +7,7 @@ export interface PortalBossPayload {
   target?: string;
   destinationFolderId?: string;
   destinationFolderUrl?: string;
+  payload?: Record<string, any>;
   clientRawData?: {
     pfData?: Record<string, any>;
     pfDadosPessoais?: Record<string, any>;
@@ -209,11 +210,38 @@ export function normalizePortalBossPayload(payload: PortalBossPayload): {
     return createFailureResult('PAYLOAD_EMPTY', 'O payload de dados recebido está vazio ou corrompido.', logs);
   }
 
+  // Normalize flat payload to clientRawData if clientRawData doesn't exist and payload.payload exists
+  if (!payload.clientRawData && payload.payload) {
+    const flatPayload = payload.payload;
+    payload.clientRawData = {
+      pfData: flatPayload,
+      pfDadosPessoais: flatPayload,
+      bancarioData: flatPayload,
+      bancarioDadosBancarios: flatPayload,
+      acessoSistema: flatPayload,
+      pjData: flatPayload,
+      pjDadosEmpresa: flatPayload,
+      socioData: flatPayload,
+      socioDadosPessoais: flatPayload
+    };
+  }
+
   // Check required wrapper keys
   const documentType = payload.documentType || '';
   const caseId = payload.caseId || '';
   const clientId = payload.clientId || '';
-  const clientType = (payload.clientType || '').toUpperCase();
+
+  // Determine clientType with fallbacks
+  let rawClientType = (payload.clientType || '').toUpperCase();
+  if (!rawClientType) {
+    if (documentType.toLowerCase().includes('pf') || (payload.payload && payload.payload.cpf)) {
+      rawClientType = 'PF';
+    } else if (documentType.toLowerCase().includes('pj') || (payload.payload && payload.payload.cnpj)) {
+      rawClientType = 'PJ';
+    }
+  }
+  const clientType = rawClientType;
+
   const destinationFolderId = payload.destinationFolderId || '';
   const destinationFolderUrl = payload.destinationFolderUrl || '';
 
@@ -402,7 +430,10 @@ export function normalizePortalBossPayload(payload: PortalBossPayload): {
   // 3. Mandatory validations according to current clientType
   const missingMandatory: string[] = [];
   if (clientType === 'PF') {
-    PF_MANDATORY_FIELDS.forEach(field => {
+    const isProcuracaoPf = documentType === 'procuracao_pf' || documentType === 'procuracao-pf';
+    const mandatoryFields = isProcuracaoPf ? ['pf_nomeCompleto', 'pf_cpf'] : PF_MANDATORY_FIELDS;
+
+    mandatoryFields.forEach(field => {
       const isFilled = pfDataNormalized[field] && pfDataNormalized[field].trim() !== '';
       if (!isFilled) {
         missingMandatory.push(field);
@@ -464,8 +495,8 @@ export function normalizePortalBossPayload(payload: PortalBossPayload): {
   }
 
   // Dynamic Case and Office Data binding
-  const casoSrc = payload.caseData || {};
-  const escritorioSrc = payload.officeData || {};
+  const casoSrc = payload.caseData || payload.payload || {};
+  const escritorioSrc = payload.officeData || payload.payload || {};
 
   const casoData = {
     naturezaAcao: casoSrc.naturezaAcao || '',
@@ -725,139 +756,137 @@ export function getTechnicalPayloadForDoc(
   if (clientType === 'PF') {
     return {
       documentType: docType,
-      caseId: 'CASE-2026-PF-98124',
-      clientId: 'CLI-54891',
+      caseId: '',
+      clientId: '',
       clientType: 'PF',
       source: 'Portal BOSS Clientes',
       target: 'GDI',
-      destinationFolderId: '1H9D4xPlOsM_GD_FOLDER_PF',
-      destinationFolderUrl: 'https://drive.google.com/drive/folders/1H9D4xPlOsM_GD_FOLDER_PF',
+      destinationFolderId: '',
+      destinationFolderUrl: '',
       clientRawData: {
-        // We provide technical duplication to verify the normalizer reconciles perfectly
         pfData: {
-          pf_nomeCompleto: 'Guilherme Giffoni Fagundes',
-          pf_cpf: '098.765.432-10',
-          pf_rg: 'MG-15.422.388',
-          pf_orgaoEmissor: 'SSP/MG',
-          pf_dataEmissao: '12/03/2015',
-          pf_nascimento: '15/08/1988',
-          pf_nacionalidade: 'Brasileiro',
-          pf_estadoCivil: 'Solteiro',
-          pf_profissao: 'Engenheiro de Automação',
-          pf_telefone: '(31) 99122-3344',
-          pf_whatsapp: '(31) 99122-3344',
-          pf_email: 'guilherme.giffoni@gmail.com',
-          pf_cep: '36570-000',
-          pf_endereco: 'Avenida PH Rolfs',
-          pf_numero: '120',
-          pf_complemento: 'Apto 302',
-          pf_bairro: 'Centro',
-          pf_cidade: 'Viçosa',
-          pf_estado: 'MG'
+          pf_nomeCompleto: '',
+          pf_cpf: '',
+          pf_rg: '',
+          pf_orgaoEmissor: '',
+          pf_dataEmissao: '',
+          pf_nascimento: '',
+          pf_nacionalidade: '',
+          pf_estadoCivil: '',
+          pf_profissao: '',
+          pf_telefone: '',
+          pf_whatsapp: '',
+          pf_email: '',
+          pf_cep: '',
+          pf_endereco: '',
+          pf_numero: '',
+          pf_complemento: '',
+          pf_bairro: '',
+          pf_cidade: '',
+          pf_estado: ''
         },
         bancarioDadosBancarios: {
-          bancario_possuiDadosBancarios: true,
-          bancario_tipoChavePix: 'CPF',
-          bancario_chavePix: '098.765.432-10',
-          bancario_bancoPix: 'Banco do Brasil',
-          bancario_titularPix: 'Guilherme Giffoni Fagundes',
-          bancario_titularEhCliente: true,
-          bancario_banco: 'Banco do Brasil',
-          bancario_agencia: '0159-7',
-          bancario_numeroConta: '12345-6',
-          bancario_operacao: '001'
+          bancario_possuiDadosBancarios: false,
+          bancario_tipoChavePix: '',
+          bancario_chavePix: '',
+          bancario_bancoPix: '',
+          bancario_titularPix: '',
+          bancario_titularEhCliente: false,
+          bancario_banco: '',
+          bancario_agencia: '',
+          bancario_numeroConta: '',
+          bancario_operacao: ''
         },
         acessoSistema: {
-          acesso_emailLogin: 'guilherme.giffoni@gmail.com',
-          acesso_statusAcesso: 'Ativo',
-          acesso_senha: 'senhaSuperSecretaNãoMapear123' // Parâmetro confidencial para teste de segurança real
+          acesso_emailLogin: '',
+          acesso_statusAcesso: '',
+          acesso_senha: ''
         }
       },
       caseData: {
-        naturezaAcao: 'Previdenciária e Possessória',
-        valorHonorarios: 'R$ 5.500,05',
-        formaPagamento: 'Entrada de R$ 1.500,00 + 4 parcelas via PIX',
-        varaCompetente: '1ª Vara Federal de Viçosa/MG',
-        foroComarca: 'Juizado Especial Federal',
-        relatoFatos: 'Solicitação de aposentadoria especial rural cumulada com tempo urbano comprovado em carteira.'
+        naturezaAcao: '',
+        valorHonorarios: '',
+        formaPagamento: '',
+        varaCompetente: '',
+        foroComarca: '',
+        relatoFatos: ''
       },
       officeData: {
-        localAssinatura: 'Viçosa, MG',
-        advogadoNome: 'RODRIGO GIFFONI RODRIGUES',
-        advogadoOab: 'OAB/MG 157.320',
-        dataAssinatura: '02 de Junho de 2026'
+        localAssinatura: '',
+        advogadoNome: '',
+        advogadoOab: '',
+        dataAssinatura: ''
       }
     };
   } else {
-    // PJ technical payload
     return {
       documentType: docType,
-      caseId: 'CASE-2026-PJ-22394',
-      clientId: 'CLI-88231',
+      caseId: '',
+      clientId: '',
       clientType: 'PJ',
       source: 'Portal BOSS Clientes',
       target: 'GDI',
-      destinationFolderId: '1H9D4xPlOsM_GD_FOLDER_PJ',
-      destinationFolderUrl: 'https://drive.google.com/drive/folders/1H9D4xPlOsM_GD_FOLDER_PJ',
+      destinationFolderId: '',
+      destinationFolderUrl: '',
       clientRawData: {
         pjDadosEmpresa: {
-          pj_razaoSocial: 'Viçosa Alimentos Inteligentes Ltda',
-          pj_nomeFantasia: 'ViçoCremes',
-          pj_cnpj: '12.345.678/0001-90',
-          pj_inscricaoEstadual: '123456789.00-11',
-          pj_inscricaoMunicipal: '987654.32-A',
-          pj_emailEmpresa: 'contato@vicocremes.com.br',
-          pj_telefoneEmpresa: '(31) 3891-2200',
-          pj_whatsappEmpresa: '(31) 98888-1111',
-          pj_cepEmpresa: '36570-010',
-          pj_enderecoEmpresa: 'Rua Benjamin Constant',
-          pj_numeroEmpresa: '450',
-          pj_complementoEmpresa: 'Galpão B',
-          pj_bairroEmpresa: 'Silvestre',
-          pj_cidadeEmpresa: 'Viçosa',
-          pj_estadoEmpresa: 'MG'
+          pj_razaoSocial: '',
+          pj_nomeFantasia: '',
+          pj_cnpj: '',
+          pj_inscricaoEstadual: '',
+          pj_inscricaoMunicipal: '',
+          pj_emailEmpresa: '',
+          pj_telefoneEmpresa: '',
+          pj_whatsappEmpresa: '',
+          pj_cepEmpresa: '',
+          pj_enderecoEmpresa: '',
+          pj_numeroEmpresa: '',
+          pj_complementoEmpresa: '',
+          pj_bairroEmpresa: '',
+          pj_cidadeEmpresa: '',
+          pj_estadoEmpresa: ''
         },
         socioDadosPessoais: {
-          socio_nomeCompleto: 'Fabiano Albuquerque Giffoni',
-          socio_cpf: '111.222.333-44',
-          socio_rg: 'M-12.871.229',
-          socio_orgaoEmissor: 'SSP/MG',
-          socio_dataEmissao: '05/10/2012',
-          socio_nascimento: '12/12/1979',
-          socio_nacionalidade: 'Brasileiro',
-          socio_estadoCivil: 'Casado',
-          socio_profissao: 'Empresário',
-          socio_telefone: '(31) 98888-2222',
-          socio_whatsapp: '(31) 98888-2222',
-          socio_email: 'fabiano@vicocremes.com.br',
-          socio_cep: '36570-150',
-          socio_endereco: 'Rua Gomes Barbosa',
-          socio_numero: '98',
-          socio_complemento: 'Apto 801',
-          socio_bairro: 'Ramos',
-          socio_cidade: 'Viçosa',
-          socio_estado: 'MG'
+          socio_nomeCompleto: '',
+          socio_cpf: '',
+          socio_rg: '',
+          socio_orgaoEmissor: '',
+          socio_dataEmissao: '',
+          socio_nascimento: '',
+          socio_nacionalidade: '',
+          socio_estadoCivil: '',
+          socio_profissao: '',
+          socio_telefone: '',
+          socio_whatsapp: '',
+          socio_email: '',
+          socio_cep: '',
+          socio_endereco: '',
+          socio_numero: '',
+          socio_complemento: '',
+          socio_bairro: '',
+          socio_cidade: '',
+          socio_estado: ''
         },
         bancarioData: {
-          bancario_possuiDadosBancarios: true,
-          bancario_tipoChavePix: 'CNPJ',
-          bancario_chavePix: '12.345.678/0001-90',
-          bancario_bancoPix: 'Itaú Unibanco',
-          bancario_titularPix: 'Viçosa Alimentos Inteligentes Ltda'
+          bancario_possuiDadosBancarios: false,
+          bancario_tipoChavePix: '',
+          bancario_chavePix: '',
+          bancario_bancoPix: '',
+          bancario_titularPix: ''
         }
       },
       caseData: {
-        naturezaAcao: 'Tributária Declaratória',
-        valorHonorarios: 'R$ 18.000,00 global',
-        formaPagamento: 'Entrada de 30% + saldo em 10 parcelas mensais de R$ 1.260,00',
-        varaCompetente: 'Vara da Fazenda Pública de Viçosa/MG',
-        relatoFatos: 'Ação declaratória de inexistência de relação jurídica com exclusão do ICMS da base de cálculo de PIS/COFINS.'
+        naturezaAcao: '',
+        valorHonorarios: '',
+        formaPagamento: '',
+        varaCompetente: '',
+        relatoFatos: ''
       },
       officeData: {
-        localAssinatura: 'Viçosa, MG',
-        advogadoNome: 'RODRIGO GIFFONI RODRIGUES',
-        advogadoOab: 'OAB/MG 157.320',
-        dataAssinatura: '02 de Junho de 2026'
+        localAssinatura: '',
+        advogadoNome: '',
+        advogadoOab: '',
+        dataAssinatura: ''
       }
     };
   }
