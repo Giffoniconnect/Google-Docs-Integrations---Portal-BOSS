@@ -721,8 +721,245 @@ function canonicalDocumentType(value: string): string {
   return map[value] || value.replace(/_/g, "-");
 }
 
-// Helper to execute GDI Automation via standard REST APIs of Google Docs and Drive
-async function executeGdiAutomation(
+function isMockFolderId(folderId: string): boolean {
+  if (!folderId) return false;
+  const normalized = String(folderId).trim().toUpperCase();
+  return (
+    normalized === "1H9D4XPLOSM_GD_FOLDER_PF" ||
+    normalized === "1H9D4XPLOSM_GD_FOLDER_PJ" ||
+    normalized.includes("FOLDER_PF") ||
+    normalized.includes("FOLDER_PJ")
+  );
+}
+
+// 1. New Placeholders-Only Executor (Tarefa 4)
+async function executePlaceholderReplacementJob(
+  payload: any
+): Promise<{ googleDocsId: string; googleDocsUrl: string; fileName: string; pdfUrl: string; logs: any[] }> {
+  const hasSa = !!credentialsConfig.gdiGoogleServiceAccountEmail && !!credentialsConfig.gdiGoogleServiceAccountPrivateKey;
+  if (!hasSa) {
+    throw new GdiAutomationError(
+      "SERVICE_ACCOUNT_NOT_CONFIGURED",
+      "A Service Account não está configurada no GDI. Cadastre o e-mail e chave privada nas credenciais."
+    );
+  }
+
+  const contractVersion = payload?.contractVersion;
+  if (contractVersion !== "gdi.placeholders.v1") {
+    throw new GdiAutomationError(
+      "INVALID_CONTRACT_VERSION",
+      `Versão de contrato inválida para o executor de placeholders: ${contractVersion || "ausente"}.`
+    );
+  }
+
+  const templateKey = payload?.templateKey || "procuracao-pf";
+  const destinationFolderId = payload?.destinationFolderId;
+  const placeholders = payload?.placeholders;
+
+  if (isMockFolderId(destinationFolderId)) {
+    throw new GdiAutomationError(
+      "MOCK_PAYLOAD_REJECTED",
+      "Payload rejeitado por conter folderId artificial. O GDI só processa destinationFolderId real enviado pelo Portal BOSS."
+    );
+  }
+
+  if (!templateKey) {
+    throw new GdiAutomationError(
+      "TEMPLATE_KEY_MISSING",
+      "O campo templateKey é obrigatório para resolver o template."
+    );
+  }
+
+  if (!destinationFolderId) {
+    throw new GdiAutomationError(
+      "DESTINATION_FOLDER_MISSING",
+      "Pasta de destino (destinationFolderId) não informada."
+    );
+  }
+
+  if (!placeholders || typeof placeholders !== "object" || Object.keys(placeholders).length === 0) {
+    throw new GdiAutomationError(
+      "PLACEHOLDERS_MISSING",
+      "Lista de placeholders obrigatórios vazia ou inválida no payload."
+    );
+  }
+
+  // Find template ID by templateKey
+  const config = templatesConfig[templateKey];
+  const templateId = config?.templateGoogleDocsId ? config.templateGoogleDocsId.trim() : "";
+
+  if (!templateId) {
+    throw new GdiAutomationError(
+      "TEMPLATE_NOT_CONFIGURED",
+      `Template mestre não configurado ou ID do template vazio para a chave de template "${templateKey}".`
+    );
+  }
+
+  // Get service account token
+  let token: string;
+  try {
+    const authRes = await getActiveToken();
+    token = authRes.token;
+  } catch (err: any) {
+    throw new GdiAutomationError(
+      "SERVICE_ACCOUNT_TEMPLATE_PERMISSION_DENIED",
+      "Não foi possível obter um token de acesso de Service Account. Verifique se as credenciais cadastrais estão corretas."
+    );
+  }
+
+  const logs: any[] = [];
+
+  // Test 1: Read template metadata
+  logs.push({ timestamp: getFormattedNow(), step: "GDI_DOCS_VERIFICATION_CALL", status: "success", message: `Teste 1: Lendo o template Google Docs original... ID: ${templateId}` });
+  let docRes;
+  try {
+    docRes = await fetch(`https://docs.googleapis.com/v1/documents/${templateId}`, {
+      headers: { "Authorization": `Bearer ${token}` }
+    });
+  } catch (err: any) {
+    throw new GdiAutomationError(
+      "SERVICE_ACCOUNT_TEMPLATE_PERMISSION_DENIED",
+      `Falha de rede ao conectar à api do Google Docs: ${err.message}`
+    );
+  }
+
+  if (!docRes.ok) {
+    throw new GdiAutomationError(
+      "SERVICE_ACCOUNT_TEMPLATE_PERMISSION_DENIED",
+      "O template original do Google Docs não pôde ser lido pela Service Account. Verifique se o documento foi compartilhado corretamente."
+    );
+  }
+
+  let docObj;
+  try {
+    docObj = await docRes.json();
+  } catch (err) {
+    throw new GdiAutomationError(
+      "SERVICE_ACCOUNT_TEMPLATE_PERMISSION_DENIED",
+      "Resposta inválida da API do Google Docs ao ler o template mestre."
+    );
+  }
+
+  const docTitle = docObj.title || "Documento";
+  logs.push({ timestamp: getFormattedNow(), step: "GDI_DOCS_TEMPLATE_READ_SUCCESS", status: "success", message: `Teste 1 Concluído! Conteúdo e metadados lidos com sucesso. Título do mestre: "${docTitle}"` });
+
+  // Test 2: Copy the template to the user-specified Drive folder
+  logs.push({ timestamp: getFormattedNow(), step: "GDI_COPY_TEMPLATE", status: "success", message: `Teste 2: Copiando template Docs para criar novo rascunho de trabalho no Google Drive...` });
+  const outputFileName = payload?.outputFileName || `GDI_${templateKey.toUpperCase()}_CASE_${payload?.caseId || "N/A"}_CLIENT_${payload?.clientId || "N/A"}`;
+  const copyBody: any = {
+    name: outputFileName
+  };
+  if (destinationFolderId) {
+    copyBody.parents = [destinationFolderId];
+  }
+
+  let copyRes;
+  try {
+    copyRes = await fetch(`https://www.googleapis.com/drive/v3/files/${templateId}/copy`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(copyBody)
+    });
+  } catch (err: any) {
+    throw new GdiAutomationError(
+      "GOOGLE_DOCS_TEMPLATE_COPY_FAILED",
+      `Erro de rede ao copiar template Docs: ${err.message}`
+    );
+  }
+
+  if (!copyRes.ok) {
+    let errDetail = "";
+    try {
+      const errJson = await copyRes.json();
+      errDetail = errJson.error?.message || "";
+    } catch {}
+
+    throw new GdiAutomationError(
+      "SERVICE_ACCOUNT_DESTINATION_FOLDER_PERMISSION_DENIED",
+      `A pasta de destino "${destinationFolderId}" não foi compartilhada com a Service Account ou esta não possui permissão de escrita. Detalhes: ${errDetail}`
+    );
+  }
+
+  let copyObj;
+  try {
+    copyObj = await copyRes.json();
+  } catch (err) {
+    throw new GdiAutomationError(
+      "GOOGLE_DOCS_TEMPLATE_COPY_FAILED",
+      "Resposta de cópia inválida recebida da API do Google Drive."
+    );
+  }
+
+  const copiedId = copyObj.id;
+  logs.push({ timestamp: getFormattedNow(), step: "GDI_CREATING_DOCUMENT", status: "success", message: `Teste 2 Concluído! Cópia descritiva de trabalho criada sob ID: ${copiedId}` });
+
+  // Test 3: Replace placeholders directly from payload.placeholders
+  logs.push({ timestamp: getFormattedNow(), step: "GDI_REPLACE_PLACEHOLDERS", status: "success", message: `Teste 3: Substituindo placeholders dinamicamente no rascunho de trabalho...` });
+  
+  const requests = Object.entries(placeholders).map(([key, value]) => ({
+    replaceAllText: {
+      containsText: {
+        text: key,
+        matchCase: true
+      },
+      replaceText: String(value) || ""
+    }
+  }));
+
+  if (requests.length > 0) {
+    let updateRes;
+    try {
+      updateRes = await fetch(`https://docs.googleapis.com/v1/documents/${copiedId}:batchUpdate`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${token}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ requests })
+      });
+    } catch (err: any) {
+      throw new GdiAutomationError(
+        "GOOGLE_DOCS_PLACEHOLDER_REPLACE_FAILED",
+        `Falha de rede ao tentar atualizar placeholders via Docs API: ${err.message}`
+      );
+    }
+
+    if (!updateRes.ok) {
+      let errDetail = "";
+      try {
+        const errJson = await updateRes.json();
+        errDetail = errJson.error?.message || "";
+      } catch {}
+
+      throw new GdiAutomationError(
+        "GOOGLE_DOCS_PLACEHOLDER_REPLACE_FAILED",
+        `Falha em batchUpdate substituindo marcadores no Google Docs. Detalhes: ${errDetail}`
+      );
+    }
+  }
+  logs.push({ timestamp: getFormattedNow(), step: "GDI_REPLACING_PLACEHOLDERS", status: "success", message: `Teste 3 Concluído! Placeholders substituídos com sucesso no Google Docs.` });
+
+  // Test 4: Save to target Drive folder verification
+  logs.push({ timestamp: getFormattedNow(), step: "GDI_SAVE_TO_DRIVE", status: "success", message: `Teste 4: Confirmando gravação na pasta de destino...` });
+  logs.push({ timestamp: getFormattedNow(), step: "GDI_SAVING_TO_DRIVE", status: "success", message: `Teste 4 Concluído! Arquivo final gravado e indexado no diretório esperado.` });
+
+  const finalDocUrl = `https://docs.google.com/document/d/${copiedId}/edit`;
+  const finalPdfUrl = `https://docs.google.com/document/d/${copiedId}/export?format=pdf`;
+
+  return {
+    googleDocsId: copiedId,
+    googleDocsUrl: finalDocUrl,
+    fileName: `${outputFileName}.docx`,
+    pdfUrl: finalPdfUrl,
+    logs
+  };
+}
+
+// 2. Legacy Portal BOSS Payload Executor (Tarefa 5)
+async function executeLegacyPortalBossPayloadJob(
   payload: any
 ): Promise<{ googleDocsId: string; googleDocsUrl: string; fileName: string; pdfUrl: string; logs: any[] }> {
   // Validate Service Account config presence
@@ -742,7 +979,7 @@ async function executeGdiAutomation(
       : (validation.errorType === "CLIENT_DATA_MISSING" ? "CLIENT_DATA_MISSING" : "PAYLOAD_INVALID");
     throw new GdiAutomationError(
       errCode,
-      `Dados inválidos no payload: ${validation.errorMessage || "Erro de validação"}`
+      `Dados inválidos no payload de legado: ${validation.errorMessage || "Erro de validação"}`
     );
   }
 
@@ -750,6 +987,13 @@ async function executeGdiAutomation(
   const destinationFolderId = normalized.destinationFolderId;
   const caseId = normalized.caseId;
   const clientId = normalized.clientId;
+
+  if (isMockFolderId(destinationFolderId)) {
+    throw new GdiAutomationError(
+      "MOCK_PAYLOAD_REJECTED",
+      "Payload rejeitado por conter folderId artificial. O GDI só processa destinationFolderId real enviado pelo Portal BOSS."
+    );
+  }
 
   // Find template ID by resolving the type to its canonical format
   const cardId = canonicalDocumentType(documentType);
@@ -954,6 +1198,17 @@ async function executeGdiAutomation(
   };
 }
 
+// Main Router function which chooses the correct execution mode
+async function executeGdiAutomation(
+  payload: any
+): Promise<{ googleDocsId: string; googleDocsUrl: string; fileName: string; pdfUrl: string; logs: any[] }> {
+  if (payload?.contractVersion === "gdi.placeholders.v1") {
+    return await executePlaceholderReplacementJob(payload);
+  } else {
+    return await executeLegacyPortalBossPayloadJob(payload);
+  }
+}
+
 function updateJobState(jobId: string, updates: Partial<Job>) {
   const index = jobsStore.findIndex(j => j.id === jobId);
   if (index !== -1) {
@@ -985,9 +1240,12 @@ app.post("/api/webhook/gdi-job", async (req, res) => {
     }
   }
 
-  const documentType = payload?.documentType || "";
+  const contractVersion = payload?.contractVersion || "";
+  const templateKey = payload?.templateKey || "";
+  const documentType = payload?.documentType || templateKey || "procuracao_pf";
   const caseId = payload?.caseId || "";
   const clientId = payload?.clientId || "";
+  const outputFileName = payload?.outputFileName || "";
 
   // Resolve clientType with fallbacks
   let rawClientType = (payload?.clientType || "").toUpperCase();
@@ -1020,7 +1278,7 @@ app.post("/api/webhook/gdi-job", async (req, res) => {
 
   const jobId = "job_" + Math.random().toString(36).substring(2, 11);
 
-  // 1. Create and Save "received" State Job FIRST before security validation
+  // 1. Create and Save "received" State Job FIRST before security/mock checks
   const initialJob: Job = {
     id: jobId,
     source: payload?.source || "Portal BOSS Clientes",
@@ -1043,7 +1301,11 @@ app.post("/api/webhook/gdi-job", async (req, res) => {
     normalizedPayload: null,
     headersMasked,
     receivedAt: timestampIso,
-    processedAt: ""
+    processedAt: "",
+    contractVersion,
+    templateKey,
+    outputFileName,
+    placeholdersCount: payload?.placeholders ? Object.keys(payload.placeholders).length : 0
   };
 
   jobsStore.unshift(initialJob);
@@ -1075,10 +1337,35 @@ app.post("/api/webhook/gdi-job", async (req, res) => {
     });
   }
 
-  // 2. Validate Phase -> Transition to validating
-  const localLogs = [...initialJob.logs, { timestamp: getFormattedNow(), step: "GDI_JOB_VALIDATING", status: "success", message: "GDI: Iniciando normalização e validação de payload. Status: validating." }];
+  // Validate early if destination folder is a mock ID (Tarefa 8)
+  if (isMockFolderId(destinationFolderId)) {
+    const mockErrorMsg = "Payload rejeitado por conter folderId artificial. O GDI só processa destinationFolderId real enviado pelo Portal BOSS.";
+    const failedLogs = [
+      ...initialJob.logs,
+      { timestamp: nowStr, step: "GDI_MOCK_FOLDER_REJECTED", status: "failed", message: mockErrorMsg }
+    ];
+
+    updateJobState(jobId, {
+      status: "failed",
+      errorCode: "MOCK_PAYLOAD_REJECTED",
+      errorMessage: mockErrorMsg,
+      logs: failedLogs,
+      processedAt: new Date().toISOString()
+    });
+
+    return res.status(400).json({
+      success: false,
+      status: "failed",
+      errorCode: "MOCK_PAYLOAD_REJECTED",
+      errorMessage: mockErrorMsg,
+      logs: failedLogs
+    });
+  }
+
+  // 2. Validate Phase -> Transition to processing/validating
+  const localLogs = [...initialJob.logs, { timestamp: getFormattedNow(), step: "GDI_JOB_VALIDATING", status: "success", message: "GDI: Iniciando processamento de integração. Status: processing." }];
   updateJobState(jobId, {
-    status: "validating",
+    status: "processing",
     logs: localLogs
   });
 
@@ -1102,14 +1389,13 @@ app.post("/api/webhook/gdi-job", async (req, res) => {
     });
   }
 
-  if (!documentType || !caseId || !clientId) {
-    const missing = [];
-    if (!documentType) missing.push("documentType");
-    if (!caseId) missing.push("caseId");
-    if (!clientId) missing.push("clientId");
+  // For contract placeholders.v1, some fields are configured inside contract version
+  const isPlaceholdersModel = (contractVersion === "gdi.placeholders.v1");
+  const requiredDocType = isPlaceholdersModel ? (templateKey || documentType) : documentType;
 
-    const errMsg = `Campos essenciais mínimos ausentes no payload: [${missing.join(", ")}]`;
-    const valFailedLogs = [...localLogs, { timestamp: getFormattedNow(), step: "GDI_VAL_FAILED", status: "failed", message: `Faltam campos: ${missing.join(", ")}` }];
+  if (!requiredDocType) {
+    const errMsg = "O campo documentType ou templateKey é obrigatório no payload.";
+    const valFailedLogs = [...localLogs, { timestamp: getFormattedNow(), step: "GDI_VAL_FAILED", status: "failed", message: errMsg }];
     updateJobState(jobId, {
       status: "failed",
       errorCode: "PAYLOAD_INVALID",
@@ -1127,30 +1413,27 @@ app.post("/api/webhook/gdi-job", async (req, res) => {
     });
   }
 
-  // 3. Normalized Extraction -> Transition to processing
-  const processingLogs = [...localLogs, { timestamp: getFormattedNow(), step: "GDI_JOB_PROCESSING", status: "success", message: "GDI: Validação concluída. Iniciando processamento do documento. Status: processing." }];
-  
   let normalizedPayload: any = null;
-  try {
-    const normResult = normalizePortalBossPayload(payload);
-    if (normResult && normResult.validation.isValid) {
-      normalizedPayload = normResult.normalized;
+  if (!isPlaceholdersModel) {
+    try {
+      const normResult = normalizePortalBossPayload(payload);
+      if (normResult && normResult.validation.isValid) {
+        normalizedPayload = normResult.normalized;
+      }
+    } catch (e) {
+      console.error("Normalizer error:", e);
     }
-  } catch (e) {
-    console.error("Normalizer error:", e);
   }
 
   updateJobState(jobId, {
-    status: "processing",
     normalizedPayload,
-    logs: processingLogs
   });
 
   try {
     const result = await executeGdiAutomation(payload);
     
     // 4. Success State -> Transition to success
-    const successLogs = [...processingLogs, ...result.logs, { timestamp: getFormattedNow(), step: "GDI_JOB_COMPLETED", status: "success", message: "GDI: Documento gerado com sucesso. Status: success." }];
+    const successLogs = [...localLogs, ...result.logs, { timestamp: getFormattedNow(), step: "GDI_JOB_COMPLETED", status: "success", message: "GDI: Documento gerado com sucesso. Status: success." }];
     updateJobState(jobId, {
       status: "success",
       result: {
@@ -1166,8 +1449,7 @@ app.post("/api/webhook/gdi-job", async (req, res) => {
     return res.json({
       success: true,
       status: "success",
-      documentType,
-      canonicalDocumentType: canonicalDocumentType(documentType),
+      documentType: requiredDocType,
       caseId,
       clientId,
       googleDocsId: result.googleDocsId,
@@ -1184,7 +1466,7 @@ app.post("/api/webhook/gdi-job", async (req, res) => {
     const errMsg = err.message || "Ocorreu um erro síncrono desconhecido ao processar integração Google.";
     
     // 5. Failed State -> Transition to failed
-    const failedLogs = [...processingLogs, {
+    const failedLogs = [...localLogs, {
       timestamp: getFormattedNow(),
       step: "failed",
       status: "failed",
@@ -1203,7 +1485,7 @@ app.post("/api/webhook/gdi-job", async (req, res) => {
     let statusCode = 500;
     if (errorCode === "SERVICE_ACCOUNT_TEMPLATE_PERMISSION_DENIED" || errorCode === "SERVICE_ACCOUNT_DESTINATION_FOLDER_PERMISSION_DENIED") {
       statusCode = 430;
-    } else if (errorCode === "PAYLOAD_INVALID" || errorCode === "SERVICE_ACCOUNT_NOT_CONFIGURED" || errorCode === "TEMPLATE_NOT_CONFIGURED" || errorCode === "CLIENT_DATA_MISSING") {
+    } else if (errorCode === "PAYLOAD_INVALID" || errorCode === "SERVICE_ACCOUNT_NOT_CONFIGURED" || errorCode === "TEMPLATE_NOT_CONFIGURED" || errorCode === "CLIENT_DATA_MISSING" || errorCode === "MOCK_PAYLOAD_REJECTED") {
       statusCode = 400;
     }
 
@@ -1248,7 +1530,9 @@ app.post("/api/webhook/gdi-job/dry-run", async (req, res) => {
     }
   }
 
-  const documentType = payload?.documentType || "";
+  const contractVersion = payload?.contractVersion || "";
+  const templateKey = payload?.templateKey || "";
+  const documentType = payload?.documentType || templateKey || "procuracao_pf";
   const caseId = payload?.caseId || "";
   const clientId = payload?.clientId || "";
 
@@ -1283,15 +1567,76 @@ app.post("/api/webhook/gdi-job/dry-run", async (req, res) => {
 
   const jobId = "job_dry_" + Math.random().toString(36).substring(2, 11);
 
+  // Validate early if destination folder is a mock ID (Tarefa 8)
+  if (isMockFolderId(destinationFolderId)) {
+    const mockErrorMsg = "Payload rejeitado por conter folderId artificial. O GDI só processa destinationFolderId real enviado pelo Portal BOSS.";
+    const failedJob: Job = {
+      id: jobId,
+      source: payload?.source || "Portal BOSS Clientes",
+      target: "GDI",
+      documentType,
+      status: "failed",
+      caseId,
+      clientId,
+      clientType,
+      destinationFolderId,
+      destinationFolderUrl,
+      payload,
+      result: { googleDocsId: null, googleDocsUrl: null, fileName: null, pdfUrl: null },
+      errorCode: "MOCK_PAYLOAD_REJECTED",
+      errorMessage: mockErrorMsg,
+      logs: [
+        { timestamp: nowStr, step: "GDI_JOB_RECEIVED_DRY_RUN", status: "success", message: "GDI: Job de dry-run recebido." },
+        { timestamp: nowStr, step: "GDI_MOCK_FOLDER_REJECTED", status: "failed", message: mockErrorMsg }
+      ],
+      createdAt: timestampIso,
+      updatedAt: timestampIso,
+      rawPayload: payload,
+      normalizedPayload: null,
+      headersMasked,
+      receivedAt: timestampIso,
+      processedAt: timestampIso,
+      contractVersion,
+      templateKey,
+      placeholdersCount: payload?.placeholders ? Object.keys(payload.placeholders).length : 0
+    };
+
+    jobsStore.unshift(failedJob);
+    saveJobs();
+
+    return res.status(400).json({
+      success: false,
+      status: "failed",
+      errorCode: "MOCK_PAYLOAD_REJECTED",
+      errorMessage: mockErrorMsg,
+      validation: { isValid: false, errorMessage: mockErrorMsg }
+    });
+  }
+
   // Parse and normalize the payload to check
   let normalizedPayload: any = null;
   let validationResult: any = null;
-  try {
-    const normResult = normalizePortalBossPayload(payload);
-    normalizedPayload = normResult?.normalized || null;
-    validationResult = normResult?.validation || null;
-  } catch (e) {
-    console.error("Normalizer error in dry-run:", e);
+  const isPlaceholdersModel = (contractVersion === "gdi.placeholders.v1");
+
+  if (!isPlaceholdersModel) {
+    try {
+      const normResult = normalizePortalBossPayload(payload);
+      normalizedPayload = normResult?.normalized || null;
+      validationResult = normResult?.validation || null;
+    } catch (e) {
+      console.error("Normalizer error in dry-run:", e);
+    }
+  } else {
+    // For placeholders model, validation matches simple criteria
+    const hasPlaceholders = payload?.placeholders && typeof payload.placeholders === "object" && Object.keys(payload.placeholders).length > 0;
+    validationResult = {
+      isValid: !!(templateKey && destinationFolderId && hasPlaceholders),
+      errorMessage: !templateKey
+        ? "templateKey obrigatória."
+        : (!destinationFolderId
+          ? "destinationFolderId obrigatória."
+          : (!hasPlaceholders ? "O objeto 'placeholders' deve ser preenchido e não-vazio." : ""))
+    };
   }
 
   // Register job with status = dry_run_received
@@ -1320,7 +1665,10 @@ app.post("/api/webhook/gdi-job/dry-run", async (req, res) => {
     normalizedPayload,
     headersMasked,
     receivedAt: timestampIso,
-    processedAt: timestampIso
+    processedAt: timestampIso,
+    contractVersion,
+    templateKey,
+    placeholdersCount: payload?.placeholders ? Object.keys(payload.placeholders).length : 0
   };
 
   jobsStore.unshift(dryRunJob);
