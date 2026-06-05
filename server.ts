@@ -56,7 +56,7 @@ interface Job {
   placeholdersCount?: number;
 }
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT || 3000);
 const app = express();
 
 app.use(express.json());
@@ -392,6 +392,16 @@ app.get("/api/health", (req, res) => {
     service: "gdi",
     webhook: "/api/webhook/gdi-job",
     auth: "service_account"
+  });
+});
+
+// GET /api/ready -> API readiness check JSON return
+app.get("/api/ready", (req, res) => {
+  res.json({
+    success: true,
+    status: "ready",
+    service: "gdi",
+    message: "GDI API runtime pronto para receber payloads."
   });
 });
 
@@ -1962,7 +1972,7 @@ async function start() {
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server fully listening on http://0.0.0.0:${PORT}`);
+    console.log(`GDI API listening on 0.0.0.0:${PORT}`);
   });
 }
 
