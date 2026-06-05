@@ -74,6 +74,70 @@ export const GdiCredentialsTab: React.FC<GdiCredentialsTabProps> = ({
     message: string;
   }>({ status: 'none', message: '' });
 
+  // Autoteste process states & methods
+  const [isSelfTesting, setIsSelfTesting] = useState(false);
+  const [selfTestResult, setSelfTestResult] = useState<{
+    ran: boolean;
+    success: boolean;
+    serviceAccountConfigured: boolean;
+    serviceAccountConfiguredHint?: string;
+    serviceAccountTokenOk: boolean;
+    serviceAccountTokenOkHint?: string;
+    templateReadable: boolean;
+    templateReadableHint?: string;
+    templateReadableTitle?: string;
+    integrationKeyConfigured: boolean;
+    integrationKeyConfiguredHint?: string;
+  } | null>(null);
+
+  const handleRunSelfTest = async () => {
+    setIsSelfTesting(true);
+    setSelfTestResult(null);
+    addActionLog('GDI_SELFTEST_STARTED', 'success', 'Operador iniciou o autoteste completo de pré-requisitos síncronos.');
+    
+    try {
+      const activeKey = integrationKeyInput || dbConfig?.gdiIntegrationKey || '';
+      const url = `/api/selftest?key=${encodeURIComponent(activeKey)}`;
+      
+      const res = await fetch(url);
+      const data = await res.json();
+      
+      if (res.ok) {
+        setSelfTestResult({
+          ran: true,
+          success: data.serviceAccountConfigured && data.serviceAccountTokenOk && data.templateReadable && data.integrationKeyConfigured,
+          ...data
+        });
+        addActionLog('GDI_SELFTEST_COMPLETED', 'success', 'Autoteste síncrono GDI verificado com sucesso.');
+      } else {
+        setSelfTestResult({
+          ran: true,
+          success: false,
+          serviceAccountConfigured: false,
+          serviceAccountTokenOk: false,
+          templateReadable: false,
+          integrationKeyConfigured: false,
+          serviceAccountConfiguredHint: data.errorMessage || "Falha ao validar chave de integração para executar o autoteste."
+        });
+        addActionLog('GDI_SELFTEST_FAILED', 'failed', `Falha ao executar autoteste: ${data.errorMessage || 'Não autorizado'}`);
+      }
+    } catch (e: any) {
+      console.error(e);
+      setSelfTestResult({
+        ran: true,
+        success: false,
+        serviceAccountConfigured: false,
+        serviceAccountTokenOk: false,
+        templateReadable: false,
+        integrationKeyConfigured: false,
+        serviceAccountConfiguredHint: `Erro de conexão: ${e.message}`
+      });
+      addActionLog('GDI_SELFTEST_ERROR', 'failed', `Erro de rede: ${e.message}`);
+    } finally {
+      setIsSelfTesting(false);
+    }
+  };
+
   // Handle cross-window communication for real Popup OAuth success/fail events
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
@@ -395,6 +459,148 @@ export const GdiCredentialsTab: React.FC<GdiCredentialsTabProps> = ({
             <div className="space-y-0.5">
               <p className="font-bold">Resultado da Verificação:</p>
               <p className="font-mono text-[11px] leading-relaxed">{verificationResult.message}</p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* CARD — DIAGNÓSTICO DE PRÉ-REQUISITOS SÍNCRONOS */}
+      <div id="gdi-selftest-card" className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs space-y-4">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+          <div className="flex items-center space-x-2.5">
+            <div className="h-8 w-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
+              <ShieldCheck className="h-4.5 w-4.5 shadow-2xs" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider font-mono">Diagnóstico de Pré-requisitos Síncronos</h3>
+              <p className="text-[10px] text-slate-400">Verificação automática em tempo real para "Gerar Procuração"</p>
+            </div>
+          </div>
+          <div>
+            <button
+              type="button"
+              id="btn-run-selftest"
+              onClick={handleRunSelfTest}
+              disabled={isSelfTesting}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white disabled:bg-slate-300 text-xs font-bold rounded-lg font-mono transition flex items-center gap-1.5 cursor-pointer shadow-sm active:scale-98"
+            >
+              {isSelfTesting ? (
+                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <ShieldCheck className="h-3.5 w-3.5" />
+              )}
+              <span>Rodar Autoteste GDI</span>
+            </button>
+          </div>
+        </div>
+
+        <p className="text-xs text-slate-500 leading-normal">
+          Este processo verifica as credenciais cadastradas, gera o token de autenticação e testa o privilégio de leitura sobre o documento mestre Google Docs. Nenhum arquivo duplicado ou alteração de dados real é gerado durante o autoteste síncrono.
+        </p>
+
+        {selfTestResult && selfTestResult.ran && (
+          <div className="space-y-3.5 border border-slate-150 rounded-xl p-4 bg-slate-50 shadow-2xs animate-fade-in">
+            <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+              <span className="text-xs font-bold text-slate-700">Status Geral do GDI:</span>
+              {selfTestResult.success ? (
+                <span className="px-3 py-1 bg-emerald-100 text-emerald-800 text-xs font-mono font-bold rounded-full border border-emerald-300">
+                  TOTALMENTE PRONTO (100%)
+                </span>
+              ) : (
+                <span className="px-3 py-1 bg-red-100 text-red-800 text-xs font-mono font-bold rounded-full border border-red-300 animate-pulse">
+                  REQUER ENGENHARIA / CORREÇÃO
+                </span>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Item 1 */}
+              <div className="bg-white p-3 rounded-lg border border-slate-150 space-y-1.5 shadow-3xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider font-mono">1. Cadastro da Service Account</span>
+                  {selfTestResult.serviceAccountConfigured ? (
+                    <CheckCircle2 className="h-4.5 w-4.5 text-emerald-600 shrink-0" />
+                  ) : (
+                    <XCircle className="h-4.5 w-4.5 text-red-650 shrink-0" />
+                  )}
+                </div>
+                <p className="text-xs font-semibold text-slate-700">
+                  {selfTestResult.serviceAccountConfigured 
+                    ? "Service Account configurada corretamente no GDI." 
+                    : "E-mail ou chave privada ausente."}
+                </p>
+                {selfTestResult.serviceAccountConfiguredHint && (
+                  <p className="text-[10px] text-red-650 bg-red-50 p-1.5 rounded leading-normal border border-red-100">
+                    💡 {selfTestResult.serviceAccountConfiguredHint}
+                  </p>
+                )}
+              </div>
+
+              {/* Item 2 */}
+              <div className="bg-white p-3 rounded-lg border border-slate-150 space-y-1.5 shadow-3xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider font-mono">2. Validade do Token IAM</span>
+                  {selfTestResult.serviceAccountTokenOk ? (
+                    <CheckCircle2 className="h-4.5 w-4.5 text-emerald-600 shrink-0" />
+                  ) : (
+                    <XCircle className="h-4.5 w-4.5 text-red-650 shrink-0" />
+                  )}
+                </div>
+                <p className="text-xs font-semibold text-slate-700">
+                  {selfTestResult.serviceAccountTokenOk 
+                    ? "Handshake com Google OAuth realizado com sucesso." 
+                    : "Falha de credencial do Google ou chave inválida."}
+                </p>
+                {selfTestResult.serviceAccountTokenOkHint && (
+                  <p className="text-[10px] text-red-650 bg-red-50 p-1.5 rounded leading-normal border border-red-100 font-mono break-all font-semibold">
+                    💡 {selfTestResult.serviceAccountTokenOkHint}
+                  </p>
+                )}
+              </div>
+
+              {/* Item 3 */}
+              <div className="bg-white p-3 rounded-lg border border-slate-150 space-y-1.5 shadow-3xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider font-mono">3. Leitura do Template Mestre</span>
+                  {selfTestResult.templateReadable ? (
+                    <CheckCircle2 className="h-4.5 w-4.5 text-emerald-600 shrink-0" />
+                  ) : (
+                    <XCircle className="h-4.5 w-4.5 text-red-650 shrink-0" />
+                  )}
+                </div>
+                <p className="text-xs font-semibold text-slate-700">
+                  {selfTestResult.templateReadable 
+                    ? `Template lido: "${selfTestResult.templateReadableTitle}"` 
+                    : "Template inacessível para a Service Account."}
+                </p>
+                {selfTestResult.templateReadableHint && (
+                  <p className="text-[10px] text-red-655 text-red-700 bg-red-50 p-1.5 rounded leading-normal border border-red-100 italic">
+                    💡 {selfTestResult.templateReadableHint}
+                  </p>
+                )}
+              </div>
+
+              {/* Item 4 */}
+              <div className="bg-white p-3 rounded-lg border border-slate-150 space-y-1.5 shadow-3xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider font-mono">4. Chave de Integração GDI</span>
+                  {selfTestResult.integrationKeyConfigured ? (
+                    <CheckCircle2 className="h-4.5 w-4.5 text-emerald-600 shrink-0" />
+                  ) : (
+                    <XCircle className="h-4.5 w-4.5 text-red-650 shrink-0" />
+                  )}
+                </div>
+                <p className="text-xs font-semibold text-slate-700">
+                  {selfTestResult.integrationKeyConfigured 
+                    ? "Auditoria de chave segura 'gdiIntegrationKey' validada." 
+                    : "Chave de integração inativa/vazia."}
+                </p>
+                {selfTestResult.integrationKeyConfiguredHint && (
+                  <p className="text-[10px] text-red-650 bg-red-50 p-1.5 rounded leading-normal border border-red-100">
+                    💡 {selfTestResult.integrationKeyConfiguredHint}
+                  </p>
+                )}
+              </div>
             </div>
           </div>
         )}

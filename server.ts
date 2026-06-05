@@ -50,6 +50,10 @@ interface Job {
   headersMasked?: Record<string, string>;
   receivedAt?: string;
   processedAt?: string;
+  contractVersion?: string;
+  templateKey?: string;
+  outputFileName?: string;
+  placeholdersCount?: number;
 }
 
 const PORT = 3000;
@@ -360,11 +364,11 @@ async function getActiveToken(): Promise<{ token: string; type: 'service_account
       ]);
       return { token, type: 'service_account' };
     } catch (e: any) {
-      throw new Error("O template ou a pasta não foi compartilhado com a Service Account.");
+      throw e;
     }
   }
 
-  throw new Error("O template ou a pasta não foi compartilhado com a Service Account.");
+  throw new Error("A Service Account não está completamente configurada (email ou chave privada ausente).");
 }
 
 // ---------------- API ENDPOINTS ----------------
@@ -397,7 +401,6 @@ app.get("/api/webhook/gdi-job", (req, res) => {
     success: true,
     status: "ready",
     service: "gdi",
-    message: "Endpoint GDI ativo. Use POST com X-BOSS-Google-Docs-Integration-Key para gerar documentos.",
     expectedMethod: "POST"
   });
 });
@@ -426,6 +429,7 @@ app.get("/api/config", (req, res) => {
     googleDriveStatus,
 
     // Safely check if sensitive details are filled without returning them
+    gdiIntegrationKey: credentialsConfig.gdiIntegrationKey,
     hasClientSecret: !!credentialsConfig.gdiGoogleClientSecret,
     hasServiceAccountPrivateKey: !!credentialsConfig.gdiGoogleServiceAccountPrivateKey,
     hasCallbackSecret: !!credentialsConfig.gdiPortalBossCallbackSecret,
@@ -732,6 +736,49 @@ function isMockFolderId(folderId: string): boolean {
   );
 }
 
+async function validateDestinationFolder(destinationFolderId: string, token: string): Promise<void> {
+  if (!destinationFolderId) {
+    throw new GdiAutomationError(
+      "DESTINATION_FOLDER_MISSING",
+      "Pasta de destino (destinationFolderId) não informada ou vazia."
+    );
+  }
+  
+  if (isMockFolderId(destinationFolderId)) {
+    throw new GdiAutomationError(
+      "MOCK_PAYLOAD_REJECTED",
+      "Payload rejeitado por conter folderId artificial. O GDI só processa destinationFolderId real enviado pelo Portal BOSS."
+    );
+  }
+
+  const saEmail = credentialsConfig.gdiGoogleServiceAccountEmail || "não configurado";
+
+  let verifyRes;
+  try {
+    verifyRes = await fetch(`https://www.googleapis.com/drive/v3/files/${destinationFolderId}?fields=id,name,mimeType`, {
+      headers: { "Authorization": `Bearer ${token}` }
+    });
+  } catch (err: any) {
+    throw new GdiAutomationError(
+      "SERVICE_ACCOUNT_DESTINATION_FOLDER_PERMISSION_DENIED",
+      `Falha de rede ao tentar validar a pasta de destino "${destinationFolderId}" via Google Drive API. Detalhes: ${err.message}. A Service Account "${saEmail}" precisa de permissão de escrita/editor.`
+    );
+  }
+
+  if (!verifyRes.ok) {
+    let errDetail = "";
+    try {
+      const errJson = await verifyRes.json();
+      errDetail = errJson.error?.message || "";
+    } catch {}
+    
+    throw new GdiAutomationError(
+      "SERVICE_ACCOUNT_DESTINATION_FOLDER_PERMISSION_DENIED",
+      `A pasta de destino "${destinationFolderId}" não pôde ser lida pela Service Account. Certifique-se de que a pasta foi compartilhada como Editor com o e-mail: "${saEmail}". Detalhes da API: ${errDetail || verifyRes.statusText}`
+    );
+  }
+}
+
 // 1. New Placeholders-Only Executor (Tarefa 4)
 async function executePlaceholderReplacementJob(
   payload: any
@@ -785,8 +832,13 @@ async function executePlaceholderReplacementJob(
   }
 
   // Find template ID by templateKey
-  const config = templatesConfig[templateKey];
-  const templateId = config?.templateGoogleDocsId ? config.templateGoogleDocsId.trim() : "";
+  let templateId = "";
+  if (templateKey === "procuracao-pf") {
+    templateId = "16k_n_BTdf8wTCG8CK4T2TyAT93o5qrmZqjbROtrBqzk";
+  } else {
+    const config = templatesConfig[templateKey];
+    templateId = config?.templateGoogleDocsId ? config.templateGoogleDocsId.trim() : "";
+  }
 
   if (!templateId) {
     throw new GdiAutomationError(
@@ -806,6 +858,9 @@ async function executePlaceholderReplacementJob(
       "Não foi possível obter um token de acesso de Service Account. Verifique se as credenciais cadastrais estão corretas."
     );
   }
+
+  // Validate destinationFolderId FIRST síncrona
+  await validateDestinationFolder(destinationFolderId, token);
 
   const logs: any[] = [];
 
@@ -1019,6 +1074,9 @@ async function executeLegacyPortalBossPayloadJob(
     );
   }
 
+  // Validate destinationFolderId FIRST síncrona
+  await validateDestinationFolder(destinationFolderId, token);
+
   const logs: any[] = [];
 
   // Test 1: Read template metadata
@@ -1221,6 +1279,91 @@ function updateJobState(jobId: string, updates: Partial<Job>) {
   }
 }
 
+// GET /api/selftest -> Executa e retorna o autoteste completo de pré-requisitos síncronos
+app.get("/api/selftest", async (req, res) => {
+  const gdiKeyHeader = req.headers["x-boss-google-docs-integration-key"] || req.query["x-boss-google-docs-integration-key"] || req.query["key"];
+  if (!gdiKeyHeader || gdiKeyHeader !== credentialsConfig.gdiIntegrationKey) {
+    const expected = credentialsConfig.gdiIntegrationKey || "";
+    const mask = expected.length >= 6 
+      ? expected.slice(0, 3) + "...[MASK]..." + expected.slice(-3)
+      : "...";
+    return res.status(401).json({
+      success: false,
+      errorCode: "UNAUTHORIZED_INTEGRATION_KEY",
+      errorMessage: "Chave de integração indevida ou cabeçalho X-BOSS-Google-Docs-Integration-Key inválido.",
+      expectedKeyMask: mask
+    });
+  }
+
+  const results: any = {
+    serviceAccountConfigured: false,
+    serviceAccountTokenOk: false,
+    templateReadable: false,
+    integrationKeyConfigured: false,
+  };
+
+  // 1. serviceAccountConfigured
+  const hasSaEmail = !!credentialsConfig.gdiGoogleServiceAccountEmail;
+  const hasSaKey = !!credentialsConfig.gdiGoogleServiceAccountPrivateKey;
+  if (hasSaEmail && hasSaKey) {
+    results.serviceAccountConfigured = true;
+  } else {
+    results.serviceAccountConfiguredHint = "Insira tanto o E-mail da Service Account quanto a Chave Privada nas configurações do GDI.";
+  }
+
+  // 2. serviceAccountTokenOk
+  let token = "";
+  if (results.serviceAccountConfigured) {
+    try {
+      const authRes = await getActiveToken();
+      token = authRes.token;
+      if (token) {
+        results.serviceAccountTokenOk = true;
+      } else {
+        results.serviceAccountTokenOkHint = "Token obtido está vazio. Verifique os escopos ou permissões no console Google Cloud.";
+      }
+    } catch (err: any) {
+      results.serviceAccountTokenOkHint = `Erro ao obter token da Service Account: ${err.message || err}. Verifique as credenciais digitadas.`;
+    }
+  } else {
+    results.serviceAccountTokenOkHint = "Não é possível testar o token sem configurar as credenciais da Service Account.";
+  }
+
+  // 3. templateReadable
+  const pPfConfig = templatesConfig["procuracao-pf"];
+  const templateId = pPfConfig?.templateGoogleDocsId || "16k_n_BTdf8wTCG8CK4T2TyAT93o5qrmZqjbROtrBqzk";
+  
+  if (results.serviceAccountTokenOk && token) {
+    try {
+      const docRes = await fetch(`https://docs.googleapis.com/v1/documents/${templateId}`, {
+        headers: { "Authorization": `Bearer ${token}` }
+      });
+      if (docRes.ok) {
+        const docObj = await docRes.json();
+        results.templateReadable = true;
+        results.templateReadableTitle = docObj.title || "Documento sem título";
+      } else {
+        const errJson = await docRes.json().catch(() => ({}));
+        const errDetail = errJson.error?.message || docRes.statusText;
+        results.templateReadableHint = `O template original do Google Docs (ID: ${templateId}) não pôde ser lido. Compartilhe o template com o e-mail da Service Account "${credentialsConfig.gdiGoogleServiceAccountEmail}" como Leitor. Detalhes: ${errDetail}`;
+      }
+    } catch (err: any) {
+      results.templateReadableHint = `Erro de rede ao ler o template: ${err.message || err}`;
+    }
+  } else {
+    results.templateReadableHint = "Testar leitura de template depende de um token ativo da Service Account.";
+  }
+
+  // 4. integrationKeyConfigured
+  if (credentialsConfig.gdiIntegrationKey && credentialsConfig.gdiIntegrationKey.trim() !== "") {
+    results.integrationKeyConfigured = true;
+  } else {
+    results.integrationKeyConfiguredHint = "A chave de integração 'gdiIntegrationKey' está vazia ou não configurada.";
+  }
+
+  res.json(results);
+});
+
 // Webhook Receptor (Section 7, 8, 9)
 app.post("/api/webhook/gdi-job", async (req, res) => {
   const gdiKeyHeader = req.headers["x-boss-google-docs-integration-key"];
@@ -1328,11 +1471,17 @@ app.post("/api/webhook/gdi-job", async (req, res) => {
       processedAt: new Date().toISOString()
     });
 
+    const expected = credentialsConfig.gdiIntegrationKey || "";
+    const mask = expected.length >= 6 
+      ? expected.slice(0, 3) + "...[MASK]..." + expected.slice(-3)
+      : "...";
+
     return res.status(401).json({
       success: false,
       status: "failed",
       errorCode: "UNAUTHORIZED_INTEGRATION_KEY",
       errorMessage: "Chave de integração indevida ou cabeçalho X-BOSS-Google-Docs-Integration-Key inválido.",
+      expectedKeyMask: mask,
       logs: [{ timestamp: nowStr, step: "GDI_SECURITY_FAILED", status: "failed", message: "Chave de integração inválida" }]
     });
   }
@@ -1445,6 +1594,15 @@ app.post("/api/webhook/gdi-job", async (req, res) => {
       logs: successLogs,
       processedAt: new Date().toISOString()
     });
+
+    if (isPlaceholdersModel) {
+      return res.json({
+        success: true,
+        status: "success",
+        googleDocsId: result.googleDocsId,
+        googleDocsUrl: result.googleDocsUrl
+      });
+    }
 
     return res.json({
       success: true,
