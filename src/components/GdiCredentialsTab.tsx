@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Lock, Save, RefreshCw, Key, Info, HelpCircle, Eye, EyeOff, ShieldCheck, Globe, Database, Trash2, CheckCircle2, AlertCircle, XCircle } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Lock, Save, RefreshCw, Key, Info, HelpCircle, Eye, EyeOff, ShieldCheck, Globe, Database, Trash2, CheckCircle2, AlertCircle, XCircle, Pencil, Copy, X, ArrowLeft, ExternalLink } from 'lucide-react';
 
 interface GdiCredentialsTabProps {
   credsForm: any;
@@ -62,10 +63,42 @@ export const GdiCredentialsTab: React.FC<GdiCredentialsTabProps> = ({
   triggerGoogleDriveDiagnostics,
   addActionLog
 }) => {
+  const navigate = useNavigate();
   const [showClientSecret, setShowClientSecret] = useState(false);
   const [showPrivateKey, setShowPrivateKey] = useState(false);
   const [showCallbackSecret, setShowCallbackSecret] = useState(false);
   const [showIntegrationKey, setShowIntegrationKey] = useState(false);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+
+  // Soft React notification overlays instead of native window.alert / window.confirm
+  const [modalData, setModalData] = useState<{ title: string; text: string } | null>(null);
+  const [confirmData, setConfirmData] = useState<{
+    title?: string;
+    message: string;
+    confirmText?: string;
+    type?: 'delete' | 'auth';
+    toastOnConfirm?: string;
+    onConfirm: () => void;
+  } | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const showToast = (message: string) => {
+    setToastMessage(message);
+    setTimeout(() => {
+      setToastMessage(null);
+    }, 3000);
+  };
+
+  const handleCopyField = (fieldName: string, value: string) => {
+    if (!value) {
+      showToast("Nada para copiar! O campo está vazio.");
+      return;
+    }
+    navigator.clipboard.writeText(value);
+    setCopiedField(fieldName);
+    showToast("Sucesso! O parâmetro foi copiado.");
+    setTimeout(() => setCopiedField(null), 2000);
+  };
 
   // Verification process states
   const [isVerifying, setIsVerifying] = useState(false);
@@ -414,7 +447,7 @@ export const GdiCredentialsTab: React.FC<GdiCredentialsTabProps> = ({
                 onClick={() => {
                   navigator.clipboard.writeText('firebase-adminsdk-fbsvc@planar-granite-495814-r8.iam.gserviceaccount.com');
                   addActionLog('GDI_SA_EMAIL_COPIED', 'success', 'E-mail da Service Account copiado para compartilhamento no Docs/Drive.');
-                  alert('E-mail da Service Account copiado para a área de transferência!');
+                  showToast('E-mail da Service Account copiado para a área de transferência!');
                 }}
                 className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded cursor-pointer transition flex items-center gap-1 shrink-0"
                 title="Copiar e-mail para compartilhar seus templates ou pastas"
@@ -658,6 +691,43 @@ export const GdiCredentialsTab: React.FC<GdiCredentialsTabProps> = ({
           </div>
         </div>
 
+        {/* Dynamic Environment Mode Cards (TAREFA 2 & 3) */}
+        {dbConfig?.viteGdiEnv === 'production' ? (
+          <div id="env-banner-gdi" className="bg-rose-50/70 border border-rose-200/80 rounded-xl p-4 flex items-start gap-4 font-sans">
+            <div className="h-9 w-9 rounded-lg bg-rose-100 border border-rose-200 text-rose-600 flex items-center justify-center shrink-0">
+              <Lock className="h-5 w-5 animate-pulse" />
+            </div>
+            <div className="space-y-1">
+              <h4 className="text-xs font-black text-rose-900 uppercase tracking-widest font-mono">
+                MODO DEPLOY BLINDADO
+              </h4>
+              <p className="text-xs text-rose-850 font-bold leading-none mt-0.5">
+                Credenciais sensíveis protegidas.
+              </p>
+              <p className="text-[11px] text-rose-700 leading-normal">
+                Chaves, segredos e tokens sensíveis serão protegidos e requerem confirmação sob demanda para revelação neste dispositivo.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div id="env-banner-gdi" className="bg-blue-50/70 border border-blue-200/80 rounded-xl p-4 flex items-start gap-4 font-sans">
+            <div className="h-9 w-9 rounded-lg bg-blue-100 border border-blue-200 text-blue-600 flex items-center justify-center shrink-0">
+              <ShieldCheck className="h-5 w-5" />
+            </div>
+            <div className="space-y-1">
+              <h4 className="text-xs font-black text-blue-900 uppercase tracking-widest font-mono">
+                MODO PREVIEW ABERTO
+              </h4>
+              <p className="text-xs text-blue-850 font-bold leading-none mt-0.5">
+                Diagnóstico liberado.
+              </p>
+              <p className="text-[11px] text-blue-700 leading-normal">
+                Valores técnicos, cargas de webhook e tokens integrados estão visíveis por padrão para facilitar a depuração. A blindagem nativa será aplicada apenas em deploy.
+              </p>
+            </div>
+          </div>
+        )}
+
         <div className="bg-blue-50/50 border border-blue-150 p-4 rounded-xl text-xs text-blue-800 leading-normal gap-2.5 flex items-start">
           <Info className="h-4.5 w-4.5 text-blue-600 shrink-0 mt-0.5" />
           <div className="space-y-1">
@@ -685,6 +755,68 @@ export const GdiCredentialsTab: React.FC<GdiCredentialsTabProps> = ({
                 className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-700 font-mono disabled:cursor-not-allowed text-[11px]"
                 placeholder="Ex: firebase-adminsdk-fbsvc@planar-granite-495814-r8.iam.gserviceaccount.com"
               />
+              
+              {/* Buttons Row for E-mail da Service Account */}
+              <div className="flex items-center gap-1.5 mt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsEditingCredsForm(true);
+                  }}
+                  className="bg-white hover:bg-slate-100 border border-slate-200 text-slate-750 font-bold text-[10.5px] px-2 py-1 rounded transition flex items-center gap-1 cursor-pointer shadow-3xs"
+                  title="Editar este parâmetro"
+                >
+                  <Pencil className="h-3 w-3 text-blue-500" />
+                  <span>Editar</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirmData({
+                      message: "Deseja realmente limpar o valor do E-mail da Service Account?",
+                      onConfirm: () => setCredsForm({ ...credsForm, gdiGoogleServiceAccountEmail: '' })
+                    });
+                  }}
+                  className="bg-white hover:bg-slate-100 border border-slate-200 text-slate-750 font-bold text-[10.5px] px-2 py-1 rounded transition flex items-center gap-1 cursor-pointer shadow-3xs"
+                  title="Limpar valor"
+                >
+                  <Trash2 className="h-3 w-3 text-rose-500" />
+                  <span>Excluir</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setModalData({
+                      title: "E-mail da Service Account",
+                      text: credsForm.gdiGoogleServiceAccountEmail || 'Não definido'
+                    });
+                  }}
+                  className="bg-white hover:bg-slate-100 border border-slate-200 text-slate-750 font-bold text-[10.5px] px-2 py-1 rounded transition flex items-center gap-1 cursor-pointer shadow-3xs"
+                  title="Visualizar valor extenso"
+                >
+                  <Eye className="h-3 w-3 text-emerald-500" />
+                  <span>Visualizar</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleCopyField('email', credsForm.gdiGoogleServiceAccountEmail || '')}
+                  className="bg-white hover:bg-slate-100 border border-slate-200 text-slate-750 font-bold text-[10.5px] px-2 py-1 rounded transition flex items-center gap-1 cursor-pointer shadow-3xs"
+                  title="Copiar e-mail"
+                >
+                  <Copy className="h-3 w-3 text-indigo-500" />
+                  <span>{copiedField === 'email' ? 'Copiado!' : 'Copiar'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveGoogleCredentials}
+                  disabled={isSavingCreds}
+                  className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold text-[10.5px] px-2.5 py-1 rounded transition flex items-center gap-1.5 cursor-pointer ml-auto shadow-3xs"
+                  title="Salvar alterações"
+                >
+                  <Save className="h-3 w-3" />
+                  <span>Salvar</span>
+                </button>
+              </div>
             </div>
 
             <div className="space-y-1">
@@ -693,11 +825,79 @@ export const GdiCredentialsTab: React.FC<GdiCredentialsTabProps> = ({
                 <textarea 
                   rows={4}
                   disabled={!isEditingCredsForm}
-                  value={isEditingCredsForm ? privateKeyInput : '-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDg4\n•••••••••••••••••••••••••••••••••••••••••••••••••••••\n-----END PRIVATE KEY-----'}
+                  value={isEditingCredsForm || showPrivateKey ? privateKeyInput : '-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDg4\n•••••••••••••••••••••••••••••••••••••••••••••••••••••\n-----END PRIVATE KEY-----'}
                   onChange={(e) => setPrivateKeyInput(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-700 font-mono disabled:cursor-not-allowed text-[11px] select-text"
                   placeholder={isEditingCredsForm ? "Cole a chave privada JSON do seu Service Account..." : "Mascarado por segurança física do repositório."}
                 />
+              </div>
+
+              {/* Buttons Row for Private Key */}
+              <div className="flex items-center gap-1.5 mt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsEditingCredsForm(true);
+                  }}
+                  className="bg-white hover:bg-slate-100 border border-slate-200 text-slate-750 font-bold text-[10.5px] px-2 py-1 rounded transition flex items-center gap-1 cursor-pointer shadow-3xs"
+                  title="Editar este parâmetro"
+                >
+                  <Pencil className="h-3 w-3 text-blue-500" />
+                  <span>Editar</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirmData({
+                      message: "Deseja realmente limpar a chave privada digitada?",
+                      onConfirm: () => setPrivateKeyInput('')
+                    });
+                  }}
+                  className="bg-white hover:bg-slate-100 border border-slate-200 text-slate-750 font-bold text-[10.5px] px-2 py-1 rounded transition flex items-center gap-1 cursor-pointer shadow-3xs"
+                  title="Limpar chave"
+                >
+                  <Trash2 className="h-3 w-3 text-rose-500" />
+                  <span>Excluir</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowPrivateKey(!showPrivateKey);
+                  }}
+                  className="bg-white hover:bg-slate-100 border border-slate-200 text-slate-750 font-bold text-[10.5px] px-2 py-1 rounded transition flex items-center gap-1 cursor-pointer shadow-3xs"
+                  title="Revelar ou ocultar chave privada"
+                >
+                  {showPrivateKey ? (
+                    <>
+                      <EyeOff className="h-3 w-3 text-slate-500" />
+                      <span>Ocultar</span>
+                    </>
+                  ) : (
+                    <>
+                      <Eye className="h-3 w-3 text-emerald-500" />
+                      <span>Visualizar</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleCopyField('privateKey', privateKeyInput || '')}
+                  className="bg-white hover:bg-slate-100 border border-slate-200 text-slate-750 font-bold text-[10.5px] px-2 py-1 rounded transition flex items-center gap-1 cursor-pointer shadow-3xs"
+                  title="Copiar private key"
+                >
+                  <Copy className="h-3 w-3 text-indigo-500" />
+                  <span>{copiedField === 'privateKey' ? 'Copiado!' : 'Copiar'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveGoogleCredentials}
+                  disabled={isSavingCreds}
+                  className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold text-[10.5px] px-2.5 py-1 rounded transition flex items-center gap-1.5 cursor-pointer ml-auto shadow-3xs"
+                  title="Salvar alterações"
+                >
+                  <Save className="h-3 w-3" />
+                  <span>Salvar</span>
+                </button>
               </div>
             </div>
 
@@ -711,6 +911,68 @@ export const GdiCredentialsTab: React.FC<GdiCredentialsTabProps> = ({
                 className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-700 font-mono disabled:cursor-not-allowed text-[11px]"
                 placeholder="Ex: planar-granite-495814-r8"
               />
+
+              {/* Buttons Row for Google Cloud Project ID */}
+              <div className="flex items-center gap-1.5 mt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsEditingCredsForm(true);
+                  }}
+                  className="bg-white hover:bg-slate-100 border border-slate-200 text-slate-750 font-bold text-[10.5px] px-2 py-1 rounded transition flex items-center gap-1 cursor-pointer shadow-3xs"
+                  title="Editar este parâmetro"
+                >
+                  <Pencil className="h-3 w-3 text-blue-500" />
+                  <span>Editar</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirmData({
+                      message: "Deseja realmente limpar o Project ID?",
+                      onConfirm: () => setCredsForm({ ...credsForm, gdiGoogleProjectId: '' })
+                    });
+                  }}
+                  className="bg-white hover:bg-slate-100 border border-slate-200 text-slate-750 font-bold text-[10.5px] px-2 py-1 rounded transition flex items-center gap-1 cursor-pointer shadow-3xs"
+                  title="Limpar project id"
+                >
+                  <Trash2 className="h-3 w-3 text-rose-500" />
+                  <span>Excluir</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setModalData({
+                      title: "Google Cloud Project ID",
+                      text: credsForm.gdiGoogleProjectId || 'Não definido'
+                    });
+                  }}
+                  className="bg-white hover:bg-slate-100 border border-slate-200 text-slate-750 font-bold text-[10.5px] px-2 py-1 rounded transition flex items-center gap-1 cursor-pointer shadow-3xs"
+                  title="Visualizar valor"
+                >
+                  <Eye className="h-3 w-3 text-emerald-500" />
+                  <span>Visualizar</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleCopyField('projectId', credsForm.gdiGoogleProjectId || '')}
+                  className="bg-white hover:bg-slate-100 border border-slate-200 text-slate-750 font-bold text-[10.5px] px-2 py-1 rounded transition flex items-center gap-1 cursor-pointer shadow-3xs"
+                  title="Copiar Project ID"
+                >
+                  <Copy className="h-3 w-3 text-indigo-500" />
+                  <span>{copiedField === 'projectId' ? 'Copiado!' : 'Copiar'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveGoogleCredentials}
+                  disabled={isSavingCreds}
+                  className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold text-[10.5px] px-2.5 py-1 rounded transition flex items-center gap-1.5 cursor-pointer ml-auto shadow-3xs"
+                  title="Salvar alterações"
+                >
+                  <Save className="h-3 w-3" />
+                  <span>Salvar</span>
+                </button>
+              </div>
             </div>
           </div>
 
@@ -728,6 +990,68 @@ export const GdiCredentialsTab: React.FC<GdiCredentialsTabProps> = ({
                 className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-700 font-mono disabled:cursor-not-allowed text-[11px]"
                 placeholder="Ex: AIzaSyD92_jZba_xyz2"
               />
+
+              {/* Buttons Row for Google Developer API Key */}
+              <div className="flex items-center gap-1.5 mt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsEditingCredsForm(true);
+                  }}
+                  className="bg-white hover:bg-slate-100 border border-slate-200 text-slate-750 font-bold text-[10.5px] px-2 py-1 rounded transition flex items-center gap-1 cursor-pointer shadow-3xs"
+                  title="Editar este parâmetro"
+                >
+                  <Pencil className="h-3 w-3 text-blue-500" />
+                  <span>Editar</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirmData({
+                      message: "Deseja realmente limpar a API Key?",
+                      onConfirm: () => setCredsForm({ ...credsForm, gdiGoogleApiKey: '' })
+                    });
+                  }}
+                  className="bg-white hover:bg-slate-100 border border-slate-200 text-slate-750 font-bold text-[10.5px] px-2 py-1 rounded transition flex items-center gap-1 cursor-pointer shadow-3xs"
+                  title="Limpar API Key"
+                >
+                  <Trash2 className="h-3 w-3 text-rose-500" />
+                  <span>Excluir</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setModalData({
+                      title: "Google Developer API Key",
+                      text: credsForm.gdiGoogleApiKey || 'Não definido'
+                    });
+                  }}
+                  className="bg-white hover:bg-slate-100 border border-slate-200 text-slate-750 font-bold text-[10.5px] px-2 py-1 rounded transition flex items-center gap-1 cursor-pointer shadow-3xs"
+                  title="Visualizar valor"
+                >
+                  <Eye className="h-3 w-3 text-emerald-500" />
+                  <span>Visualizar</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleCopyField('apiKey', credsForm.gdiGoogleApiKey || '')}
+                  className="bg-white hover:bg-slate-100 border border-slate-200 text-slate-750 font-bold text-[10.5px] px-2 py-1 rounded transition flex items-center gap-1 cursor-pointer shadow-3xs"
+                  title="Copiar API Key"
+                >
+                  <Copy className="h-3 w-3 text-indigo-500" />
+                  <span>{copiedField === 'apiKey' ? 'Copiado!' : 'Copiar'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveGoogleCredentials}
+                  disabled={isSavingCreds}
+                  className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold text-[10.5px] px-2.5 py-1 rounded transition flex items-center gap-1.5 cursor-pointer ml-auto shadow-3xs"
+                  title="Salvar alterações"
+                >
+                  <Save className="h-3 w-3" />
+                  <span>Salvar</span>
+                </button>
+              </div>
             </div>
 
             <div className="space-y-1">
@@ -736,7 +1060,7 @@ export const GdiCredentialsTab: React.FC<GdiCredentialsTabProps> = ({
                 <input 
                   type={showCallbackSecret ? 'text' : 'password'}
                   disabled={!isEditingCredsForm}
-                  value={isEditingCredsForm ? callbackSecretInput : '••••••••••••••••••••••••••••••••'}
+                  value={isEditingCredsForm || showCallbackSecret ? callbackSecretInput : '••••••••••••••••••••••••••••••••'}
                   onChange={(e) => setCallbackSecretInput(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-700 font-mono disabled:cursor-not-allowed text-[11px] pr-10"
                   placeholder={isEditingCredsForm ? "Secret para validar segurança de callback..." : "Símbolo ocultado"}
@@ -745,11 +1069,79 @@ export const GdiCredentialsTab: React.FC<GdiCredentialsTabProps> = ({
                   <button
                     type="button"
                     onClick={() => setShowCallbackSecret(!showCallbackSecret)}
-                    className="absolute right-2 top-2 text-slate-400 hover:text-slate-600"
+                    className="absolute right-2 top-2 text-slate-400 hover:text-slate-600 cursor-pointer"
                   >
                     {showCallbackSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
                 )}
+              </div>
+
+              {/* Buttons Row for BOSS Callback Secret */}
+              <div className="flex items-center gap-1.5 mt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsEditingCredsForm(true);
+                  }}
+                  className="bg-white hover:bg-slate-100 border border-slate-200 text-slate-750 font-bold text-[10.5px] px-2 py-1 rounded transition flex items-center gap-1 cursor-pointer shadow-3xs"
+                  title="Editar este parâmetro"
+                >
+                  <Pencil className="h-3 w-3 text-blue-500" />
+                  <span>Editar</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirmData({
+                      message: "Deseja realmente limpar o Callback Secret?",
+                      onConfirm: () => setCallbackSecretInput('')
+                    });
+                  }}
+                  className="bg-white hover:bg-slate-100 border border-slate-200 text-slate-750 font-bold text-[10.5px] px-2 py-1 rounded transition flex items-center gap-1 cursor-pointer shadow-3xs"
+                  title="Limpar Callback Secret"
+                >
+                  <Trash2 className="h-3 w-3 text-rose-500" />
+                  <span>Excluir</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCallbackSecret(!showCallbackSecret);
+                  }}
+                  className="bg-white hover:bg-slate-100 border border-slate-200 text-slate-750 font-bold text-[10.5px] px-2 py-1 rounded transition flex items-center gap-1 cursor-pointer shadow-3xs"
+                  title="Revelar ou ocultar segredo de callback"
+                >
+                  {showCallbackSecret ? (
+                    <>
+                      <EyeOff className="h-3 w-3 text-slate-500" />
+                      <span>Ocultar</span>
+                    </>
+                  ) : (
+                    <>
+                      <Eye className="h-3 w-3 text-emerald-500" />
+                      <span>Visualizar</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleCopyField('callbackSecret', callbackSecretInput || '')}
+                  className="bg-white hover:bg-slate-100 border border-slate-200 text-slate-750 font-bold text-[10.5px] px-2 py-1 rounded transition flex items-center gap-1 cursor-pointer shadow-3xs"
+                  title="Copiar Callback Secret"
+                >
+                  <Copy className="h-3 w-3 text-indigo-500" />
+                  <span>{copiedField === 'callbackSecret' ? 'Copiado!' : 'Copiar'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveGoogleCredentials}
+                  disabled={isSavingCreds}
+                  className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold text-[10.5px] px-2.5 py-1 rounded transition flex items-center gap-1.5 cursor-pointer ml-auto shadow-3xs"
+                  title="Salvar alterações"
+                >
+                  <Save className="h-3 w-3" />
+                  <span>Salvar</span>
+                </button>
               </div>
             </div>
 
@@ -759,7 +1151,7 @@ export const GdiCredentialsTab: React.FC<GdiCredentialsTabProps> = ({
                 <input 
                   type={showIntegrationKey ? 'text' : 'password'}
                   disabled={!isEditingCredsForm}
-                  value={isEditingCredsForm ? integrationKeyInput : '••••••••••••••••••••••••••••••••'}
+                  value={isEditingCredsForm || showIntegrationKey ? integrationKeyInput : '••••••••••••••••••••••••••••••••'}
                   onChange={(e) => setIntegrationKeyInput(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-slate-700 font-mono disabled:cursor-not-allowed text-[11px] pr-10"
                   placeholder={isEditingCredsForm ? "Token para cabeçalho do webhook..." : "Símbolo ocultado"}
@@ -767,12 +1159,135 @@ export const GdiCredentialsTab: React.FC<GdiCredentialsTabProps> = ({
                 {!isEditingCredsForm ? null : (
                   <button
                     type="button"
-                    onClick={() => setShowIntegrationKey(!showIntegrationKey)}
-                    className="absolute right-2 top-2 text-slate-400 hover:text-slate-600"
+                    onClick={() => {
+                      if (!showIntegrationKey && dbConfig?.viteGdiEnv === 'production') {
+                        setConfirmData({
+                          title: "Autorizar Revelação de Chave",
+                          message: "Segurança de Produção: Deseja realmente revelar a chave secreta integrada no painel?",
+                          confirmText: "Autorizar",
+                          type: "auth",
+                          toastOnConfirm: "Chave revelada com sucesso!",
+                          onConfirm: () => setShowIntegrationKey(true)
+                        });
+                      } else {
+                        setShowIntegrationKey(!showIntegrationKey);
+                      }
+                    }}
+                    className="absolute right-2 top-2 text-slate-400 hover:text-slate-600 cursor-pointer"
                   >
                     {showIntegrationKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
                 )}
+              </div>
+
+              {/* Buttons Row for Audity GDI Key */}
+              <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsEditingCredsForm(true);
+                  }}
+                  className="bg-white hover:bg-slate-100 border border-slate-200 text-slate-750 font-bold text-[10.5px] px-2 py-1 rounded transition flex items-center gap-1 cursor-pointer shadow-3xs"
+                  title="Editar este parâmetro"
+                >
+                  <Pencil className="h-3 w-3 text-blue-500" />
+                  <span>Editar</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirmData({
+                      message: "Deseja realmente limpar a chave de auditoria integrada GDI?",
+                      onConfirm: () => setIntegrationKeyInput('')
+                    });
+                  }}
+                  className="bg-white hover:bg-slate-100 border border-slate-200 text-slate-750 font-bold text-[10.5px] px-2 py-1 rounded transition flex items-center gap-1 cursor-pointer shadow-3xs"
+                  title="Limpar GDI Key"
+                >
+                  <Trash2 className="h-3 w-3 text-rose-500" />
+                  <span>Excluir</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!showIntegrationKey && dbConfig?.viteGdiEnv === 'production') {
+                      setConfirmData({
+                        title: "Autorizar Visualização (DEPLOY BLINDADO)",
+                        message: "ATENÇÃO (DEPLOY BLINDADO): A visualização desta chave sensível requer confirmação explícita. Autorizar?",
+                        confirmText: "Autorizar",
+                        type: "auth",
+                        toastOnConfirm: "Visualização autorizada com sucesso!",
+                        onConfirm: () => setShowIntegrationKey(true)
+                      });
+                    } else {
+                      setShowIntegrationKey(!showIntegrationKey);
+                    }
+                  }}
+                  className="bg-white hover:bg-slate-100 border border-slate-200 text-slate-750 font-bold text-[10.5px] px-2 py-1 rounded transition flex items-center gap-1 cursor-pointer shadow-3xs"
+                  title="Revelar ou ocultar chave de auditoria"
+                >
+                  {showIntegrationKey ? (
+                    <>
+                      <EyeOff className="h-3 w-3 text-slate-500" />
+                      <span>Ocultar</span>
+                    </>
+                  ) : (
+                    <>
+                      <Eye className="h-3 w-3 text-emerald-500" />
+                      <span>Visualizar</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleCopyField('integrationKey', integrationKeyInput || '')}
+                  className="bg-white hover:bg-slate-100 border border-slate-200 text-slate-750 font-bold text-[10.5px] px-2 py-1 rounded transition flex items-center gap-1 cursor-pointer shadow-3xs"
+                  title="Copiar GDI Key"
+                >
+                  <Copy className="h-3 w-3 text-indigo-500" />
+                  <span>{copiedField === 'integrationKey' ? 'Copiado!' : 'Copiar'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveGoogleCredentials}
+                  disabled={isSavingCreds}
+                  className="bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white font-bold text-[10.5px] px-2.5 py-1 rounded transition flex items-center gap-1 cursor-pointer shadow-3xs"
+                  title="Salvar alterações"
+                >
+                  <Save className="h-3 w-3" />
+                  <span>Salvar</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate('/')}
+                  className="bg-slate-600 hover:bg-slate-700 text-white font-bold text-[10.5px] px-2.5 py-1 rounded transition flex items-center gap-1 cursor-pointer"
+                  title="Voltar para a central principal"
+                >
+                  <ArrowLeft className="h-3 w-3" />
+                  <span>Voltar</span>
+                </button>
+              </div>
+
+              {/* Explicit Instructions linking GDI to Portal BOSS */}
+              <div id="gdi-sync-instructions" className="bg-slate-50/90 rounded-lg p-3 text-[11px] text-slate-600 mt-3 flex flex-col gap-1 border border-slate-200 leading-relaxed">
+                <span className="font-bold text-slate-800 flex items-center gap-1.5 font-sans">
+                  <Info className="h-3.5 w-3.5 text-blue-500" />
+                  Chave de Sincronização Obrigatória (TAREFA 4)
+                </span>
+                <p>
+                  Esta é a chave secreta que deve ser colada no Portal BOSS em:
+                </p>
+                <button
+                  type="button"
+                  onClick={() => navigate('/boss-giffoni-clientes/configuracoes/integracoes-google-docs')}
+                  className="text-left font-mono bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold px-2 py-1 rounded border border-blue-100 my-1 cursor-pointer flex items-center gap-1 w-fit text-[10px]"
+                >
+                  <ExternalLink className="h-3 w-3 shrink-0" />
+                  <span>/boss-giffoni-clientes/configuracoes/integracoes-google-docs</span>
+                </button>
+                <p>
+                  No campo: <strong className="text-slate-800 font-sans">Chave secreta do header X-BOSS-Google-Docs-Integration-Key</strong>.
+                </p>
               </div>
             </div>
 
@@ -918,6 +1433,106 @@ export const GdiCredentialsTab: React.FC<GdiCredentialsTabProps> = ({
           )}
         </div>
       </div>
+
+      {/* Custom Toast Overlay */}
+      {toastMessage && (
+        <div className="fixed bottom-5 right-5 z-[9999] bg-slate-900 text-white text-xs px-4 py-3 rounded-lg shadow-2xl border border-slate-700/50 flex items-center gap-2.5 animate-in fade-in slide-in-from-bottom-2 duration-200">
+          <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+          <span className="font-sans font-medium">{toastMessage}</span>
+        </div>
+      )}
+
+      {/* Custom View Modal Overlay */}
+      {modalData && (
+        <div className="fixed inset-0 z-[9999] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full border border-slate-200 shadow-2xl overflow-hidden flex flex-col max-h-[80vh] animate-in fade-in zoom-in-95 duration-200">
+            <div className="bg-slate-50 px-5 py-3.5 border-b border-slate-100 flex items-center justify-between">
+              <h3 className="font-bold text-slate-900 text-xs font-mono tracking-wide uppercase flex items-center gap-2">
+                <Key className="h-4 w-4 text-indigo-500" />
+                <span>{modalData.title}</span>
+              </h3>
+              <button 
+                onClick={() => setModalData(null)}
+                className="text-slate-400 hover:text-slate-600 rounded-lg p-1 hover:bg-slate-100 transition cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="p-5 overflow-y-auto font-mono text-[11px] text-slate-800 bg-slate-50/50 border-b border-slate-100 select-all whitespace-pre-wrap break-all leading-relaxed max-h-96">
+              {modalData.text}
+            </div>
+            <div className="px-5 py-3.5 bg-slate-50 flex items-center justify-end gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(modalData.text);
+                  showToast("Copiado para a área de transferência!");
+                }}
+                className="px-3.5 py-1.5 bg-indigo-650 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs rounded-lg shadow-xs transition flex items-center gap-1.5 cursor-pointer font-sans"
+              >
+                <Copy className="h-3.5 w-3.5" />
+                <span>Copiar Tudo</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setModalData(null)}
+                className="px-3.5 py-1.5 bg-white hover:bg-slate-100 border border-slate-200 hover:border-slate-300 text-slate-700 font-semibold text-xs rounded-lg shadow-2xs transition cursor-pointer font-sans"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Custom Confirmation Dialog Overlay */}
+      {confirmData && (
+        <div className="fixed inset-0 z-[9999] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-sm w-full border border-slate-200 shadow-2xl p-5 space-y-4 animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-start gap-3">
+              {confirmData.type === 'auth' ? (
+                <div className="h-9 w-9 rounded-full bg-emerald-50 border border-emerald-100 flex items-center justify-center shrink-0">
+                  <ShieldCheck className="h-5 w-5 text-emerald-600" />
+                </div>
+              ) : (
+                <div className="h-9 w-9 rounded-full bg-rose-50 border border-rose-100 flex items-center justify-center shrink-0">
+                  <AlertCircle className="h-5 w-5 text-rose-600" />
+                </div>
+              )}
+              <div className="space-y-1">
+                <h3 className="font-bold text-slate-900 text-sm font-sans leading-snug">
+                  {confirmData.title || "Confirmar Exclusão"}
+                </h3>
+                <p className="text-xs text-slate-500 font-sans leading-relaxed">{confirmData.message}</p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-slate-100 pt-3">
+              <button
+                type="button"
+                onClick={() => setConfirmData(null)}
+                className="px-3.5 py-1.5 bg-white hover:bg-slate-100 border border-slate-200 hover:border-slate-300 text-slate-700 font-semibold text-xs rounded-lg shadow-2xs transition cursor-pointer font-sans"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  confirmData.onConfirm();
+                  setConfirmData(null);
+                  showToast(confirmData.toastOnConfirm || "Campo limpo com sucesso! Lembre-se de salvar.");
+                }}
+                className={`px-4 py-1.5 text-white font-semibold text-xs rounded-lg shadow-xs transition cursor-pointer font-sans ${
+                  confirmData.type === 'auth'
+                    ? 'bg-emerald-600 hover:bg-emerald-700'
+                    : 'bg-rose-600 hover:bg-rose-700'
+                }`}
+              >
+                {confirmData.confirmText || "Excluir"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

@@ -135,6 +135,10 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
         const configData = await configRes.json();
         setDbConfig(configData);
         setCredsForm(configData);
+        if (configData.gdiGoogleClientSecret) setClientSecretInput(configData.gdiGoogleClientSecret);
+        if (configData.gdiGoogleServiceAccountPrivateKey) setPrivateKeyInput(configData.gdiGoogleServiceAccountPrivateKey);
+        if (configData.gdiPortalBossCallbackSecret) setCallbackSecretInput(configData.gdiPortalBossCallbackSecret);
+        if (configData.gdiIntegrationKey) setIntegrationKeyInput(configData.gdiIntegrationKey);
         if (configData.googleAuthStatus) setGoogleAuthStatus(configData.googleAuthStatus);
         if (configData.googleDocsStatus) setGoogleDocsStatus(configData.googleDocsStatus);
         if (configData.googleDriveStatus) setGoogleDriveStatus(configData.googleDriveStatus);
@@ -660,6 +664,7 @@ export default function AutomacaoConfigView({ card, onBackToAutomacao, onBackToC
             triggerGoogleDocsDiagnostics={triggerGoogleDocsDiagnostics}
             triggerGoogleDriveDiagnostics={triggerGoogleDriveDiagnostics}
             triggerClearJobsQueue={triggerClearJobsQueue}
+            reloadJobsList={reloadJobsList}
             onSaveTemplate={handleSaveActiveTemplate}
             isSavingTemplate={isSavingTemplate}
             getDocFriendlyName={getDocFriendlyName}

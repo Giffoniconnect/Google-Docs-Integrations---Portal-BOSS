@@ -4,6 +4,7 @@ import Header from './components/Header';
 import CentralView from './components/CentralView';
 import DocDetailView from './components/DocDetailView';
 import AutomacaoConfigView from './components/AutomacaoConfigView';
+import PortalBossConfigView from './components/PortalBossConfigView';
 import NovaIntegracaoModal from './components/NovaIntegracaoModal';
 import { DocCard } from './types';
 
@@ -160,6 +161,7 @@ function PrimaryApp() {
           <Route path="/automacao-declaracao-pobreza-pj/configuracao-da-declaracao-pobreza-pj" element={<AutomacaoConfigView card={CARDS[5]} onBackToAutomacao={() => navigate(CARDS[5].route)} onBackToCentral={() => navigate('/')} />} />
           <Route path="/automacao-contrato-honorarios-pj/configuracao-do-contrato-honorarios-pj" element={<AutomacaoConfigView card={CARDS[6]} onBackToAutomacao={() => navigate(CARDS[6].route)} onBackToCentral={() => navigate('/')} />} />
           <Route path="/automacao-primeiro-atendimento-pj/configuracao-do-primeiro-atendimento-pj" element={<AutomacaoConfigView card={CARDS[7]} onBackToAutomacao={() => navigate(CARDS[7].route)} onBackToCentral={() => navigate('/')} />} />
+          <Route path="/boss-giffoni-clientes/configuracoes/integracoes-google-docs" element={<PortalBossConfigView />} />
 
           {/* Fallback route */}
           <Route path="*" element={<Navigate to="/" replace />} />

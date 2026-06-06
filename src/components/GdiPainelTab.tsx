@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { 
   Settings, FileCode, ExternalLink, ShieldAlert, FolderCheck, 
-  RefreshCw, Copy, CheckCircle, Terminal, Trash2, CheckCircle2, History, Send, Info
+  RefreshCw, Copy, CheckCircle, Terminal, Trash2, CheckCircle2, History, Send, Info,
+  Pencil, Eye, Save
 } from 'lucide-react';
 import { GoogleDocsCard } from '../types';
 import { getTechnicalPayloadForDoc } from '../utils/portalBossMapper';
@@ -26,7 +27,8 @@ interface GdiPainelTabProps {
   triggerGoogleDocsDiagnostics: () => Promise<void>;
   triggerGoogleDriveDiagnostics: () => Promise<void>;
   triggerClearJobsQueue: () => Promise<void>;
-  onSaveTemplate: () => Promise<void>;
+  reloadJobsList?: () => Promise<void>;
+  onSaveTemplate: (updatedFields?: any) => Promise<void>;
   isSavingTemplate: boolean;
   getDocFriendlyName: () => string;
   rawPayloadText: string;
@@ -57,6 +59,7 @@ export const GdiPainelTab: React.FC<GdiPainelTabProps> = ({
   triggerGoogleDocsDiagnostics,
   triggerGoogleDriveDiagnostics,
   triggerClearJobsQueue,
+  reloadJobsList,
   onSaveTemplate,
   isSavingTemplate,
   getDocFriendlyName,
@@ -69,6 +72,43 @@ export const GdiPainelTab: React.FC<GdiPainelTabProps> = ({
 }) => {
   const [payloadViewMode, setPayloadViewMode] = useState<'real' | 'contract'>('real');
   const [copiedContract, setCopiedContract] = useState(false);
+  const [copiedJobId, setCopiedJobId] = useState<string | null>(null);
+
+  const handleDeleteSingleJob = async (jobId: string) => {
+    if (confirm(`Deseja realmente excluir permanentemente o log de payload #${jobId}?`)) {
+      try {
+        const res = await fetch(`/api/jobs/${jobId}`, { method: 'DELETE' });
+        if (res.ok) {
+          alert(`Payload #${jobId} excluído com sucesso.`);
+          if (reloadJobsList) {
+            await reloadJobsList();
+          }
+        } else {
+          alert('Falha ao excluir o payload.');
+        }
+      } catch (err: any) {
+        alert('Erro ao processar exclusão: ' + err.message);
+      }
+    }
+  };
+
+  const handleEditJobPayload = (job: any) => {
+    const payloadStr = JSON.stringify(job.payload || job, null, 2);
+    setRawPayloadText(payloadStr);
+    alert(`Payload #${job.id} carregado com sucesso no Editor JSON! Modifique o conteúdo e dispare o integrador se desejar.`);
+    // Smooth scroll to payload editor
+    const editorEl = document.getElementById('technical-payload-card');
+    if (editorEl) {
+      editorEl.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
+
+  const handleCopyJobPayload = (jobId: string, payload: any) => {
+    const textToCopy = JSON.stringify(payload || {}, null, 2);
+    navigator.clipboard.writeText(textToCopy);
+    setCopiedJobId(jobId);
+    setTimeout(() => setCopiedJobId(null), 2000);
+  };
 
   const matchingJobs = jobsQueue.filter((job: any) => {
     if (!job) return false;
@@ -325,6 +365,7 @@ export const GdiPainelTab: React.FC<GdiPainelTabProps> = ({
                 <label className="text-[10px] uppercase font-mono font-bold text-slate-400 block mb-1">Google Docs Template ID</label>
                 <input 
                   type="text" 
+                  id="templateIdInput"
                   value={templateId} 
                   onChange={(e) => {
                     setTemplateId(e.target.value);
@@ -336,27 +377,98 @@ export const GdiPainelTab: React.FC<GdiPainelTabProps> = ({
               </div>
             </div>
 
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50 p-3 rounded-xl border border-slate-205 font-mono text-[11px]">
-              <div className="space-y-0.5">
-                <span className="text-[9px] uppercase font-bold text-slate-400 block">Link Original de Edição</span>
-                <a 
-                  href={`https://docs.google.com/document/d/${templateId || '16k_n_BTdf8wTCG8CK4T2TyAT93o5qrmZqjbROtrBqzk'}/edit`}
-                  target="_blank" 
-                  rel="noreferrer" 
-                  className="text-blue-600 font-bold underline break-all flex items-center gap-1 hover:text-blue-700"
+            {/* BARRA DE AÇÕES RÁPIDAS DO MODELO (com os 5 botões funcionais) */}
+            <div className="border border-slate-200 rounded-xl p-3.5 bg-slate-50/75 space-y-2.5">
+              <span className="text-[10px] uppercase font-mono font-bold text-slate-550 block">Ações do Modelo de Procuração</span>
+              <div className="flex flex-wrap items-center gap-2">
+                {/* 1. Lápis para editar */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const el = document.getElementById('templateIdInput');
+                    if (el) {
+                      el.focus();
+                      alert('Modo de edição do ID ativado! Insira o novo ID do Google Docs na caixa de campo correspondente.');
+                    }
+                  }}
+                  className="bg-white hover:bg-slate-100 text-slate-700 font-semibold text-xs px-3 py-2 rounded-lg border border-slate-200 transition inline-flex items-center gap-1.5 cursor-pointer shadow-3xs"
+                  title="Editar ID do template"
                 >
-                  <span>Abrir Template no Google Docs</span>
-                  <ExternalLink className="h-3 w-3 shrink-0" />
+                  <Pencil className="h-3.5 w-3.5 text-blue-500" />
+                  <span>Editar ID</span>
+                </button>
+
+                {/* 2. Lixeira para excluir */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (confirm('Deseja realmente excluir/limpar o ID do template atual do campo de edição?')) {
+                      setTemplateId('');
+                      if (templateStatus === 'configurado' || templateStatus === 'validated') {
+                        setTemplateStatus('não_configurado');
+                      }
+                      alert('ID do template excluído do campo de digitação!');
+                    }
+                  }}
+                  className="bg-white hover:bg-slate-105 text-slate-700 font-semibold text-xs px-3 py-2 rounded-lg border border-slate-200 transition inline-flex items-center gap-1.5 cursor-pointer shadow-3xs"
+                  title="Excluir/limpar ID do formulário"
+                >
+                  <Trash2 className="h-3.5 w-3.5 text-rose-500" />
+                  <span>Excluir ID</span>
+                </button>
+
+                {/* 3. Olhinho para visualizar */}
+                <a
+                  href={templateId ? `https://docs.google.com/document/d/${templateId}/edit` : '#'}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={(e) => {
+                    if (!templateId) {
+                      e.preventDefault();
+                      alert('Não há ID de template definido para visualizar. Digite um ID primeiro!');
+                    }
+                  }}
+                  className="bg-white hover:bg-slate-100 text-slate-700 font-semibold text-xs px-3 py-2 rounded-lg border border-slate-200 transition inline-flex items-center gap-1.5 cursor-pointer shadow-3xs"
+                  title="Visualizar documento mestre no Google Docs"
+                >
+                  <Eye className="h-3.5 w-3.5 text-emerald-500" />
+                  <span>Visualizar</span>
                 </a>
-              </div>
-              <div className="flex items-center gap-2">
-                <button 
-                  onClick={onSaveTemplate}
-                  disabled={isSavingTemplate || !templateId}
-                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold rounded-lg transition text-xs cursor-pointer inline-flex items-center gap-1"
+
+                {/* 4. Dois quadradinhos para copiar */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (templateId) {
+                      navigator.clipboard.writeText(templateId);
+                      alert('Chave Google Docs ID copiada com sucesso para a área de transferência!');
+                    } else {
+                      alert('Nada para copiar (o campo está vazio).');
+                    }
+                  }}
+                  className="bg-white hover:bg-slate-100 text-slate-700 font-semibold text-xs px-3 py-2 rounded-lg border border-slate-200 transition inline-flex items-center gap-1.5 cursor-pointer shadow-3xs"
+                  title="Copiar ID do template"
                 >
-                  <RefreshCw className={`h-3 w-3 ${isSavingTemplate ? 'animate-spin' : ''}`} />
-                  <span>{isSavingTemplate ? 'Salvando...' : 'Gravar ID'}</span>
+                  <Copy className="h-3.5 w-3.5 text-indigo-500" />
+                  <span>Copiar ID</span>
+                </button>
+
+                {/* 5. Salvar configurações */}
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!templateId) {
+                      alert('GDI AVISO: não é possível salvar uma configuração de ID de template vazia.');
+                      return;
+                    }
+                    await onSaveTemplate({ templateGoogleDocsId: templateId });
+                  }}
+                  disabled={isSavingTemplate}
+                  className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-350 text-white font-bold text-xs px-4 py-2.5 rounded-lg transition inline-flex items-center gap-1.5 cursor-pointer shadow-3xs ml-auto"
+                  title="Salvar alterações de ID no banco de dados definitivamente"
+                >
+                  <Save className="h-3.5 w-3.5" />
+                  <span>{isSavingTemplate ? 'Salvando...' : 'Salvar Configurações'}</span>
                 </button>
               </div>
             </div>
@@ -701,8 +813,62 @@ export const GdiPainelTab: React.FC<GdiPainelTabProps> = ({
                     </div>
                   )}
 
+                  {/* BARRA DE AÇÕES DO LOG DE PAYLOAD (Editar, Excluir, Visualizar, Copiar) */}
+                  <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-slate-200 mt-2">
+                    {/* 1. Lápis para editar */}
+                    <button
+                      type="button"
+                      onClick={() => handleEditJobPayload(job)}
+                      className="px-2.5 py-1.5 bg-white hover:bg-slate-100 border border-slate-200 rounded text-[10px] font-bold text-slate-700 flex items-center gap-1.5 transition cursor-pointer shadow-3xs"
+                      title="Carregar payload no Editor JSON acima para editar"
+                    >
+                      <Pencil className="h-3 w-3 text-blue-500" />
+                      <span>Editar</span>
+                    </button>
+
+                    {/* 2. Lixeira para excluir */}
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteSingleJob(job.id)}
+                      className="px-2.5 py-1.5 bg-white hover:bg-slate-100 border border-slate-200 rounded text-[10px] font-bold text-slate-700 flex items-center gap-1.5 transition cursor-pointer shadow-3xs"
+                      title="Excluir este payload do histórico"
+                    >
+                      <Trash2 className="h-3 w-3 text-rose-500" />
+                      <span>Excluir</span>
+                    </button>
+
+                    {/* 3. Olhinho para visualizar */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const docUrl = job.result?.googleDocsUrl || job.googleDocsUrl;
+                        if (docUrl) {
+                          window.open(docUrl, '_blank');
+                        } else {
+                          alert(`O documento para este payload #${job.id} não foi gerado ou falhou no processamento.`);
+                        }
+                      }}
+                      className="px-2.5 py-1.5 bg-white hover:bg-slate-100 border border-slate-200 rounded text-[10px] font-bold text-slate-700 flex items-center gap-1.5 transition cursor-pointer shadow-3xs"
+                      title="Visualizar documento gerado no Google Docs"
+                    >
+                      <Eye className="h-3.5 w-3.5 text-emerald-500" />
+                      <span>Visualizar</span>
+                    </button>
+
+                    {/* 4. Dois quadradinhos para copiar */}
+                    <button
+                      type="button"
+                      onClick={() => handleCopyJobPayload(job.id, job.payload || job)}
+                      className="px-2.5 py-1.5 bg-white hover:bg-slate-100 border border-slate-200 rounded text-[10px] font-bold text-slate-700 flex items-center gap-1.5 transition cursor-pointer shadow-3xs"
+                      title="Copiar payload JSON para área de transferência"
+                    >
+                      <Copy className="h-3 w-3 text-indigo-500" />
+                      <span>{copiedJobId === job.id ? 'Copiado!' : 'Copiar'}</span>
+                    </button>
+                  </div>
+
                   {(job.errorCode || job.errorMessage) && (
-                    <div className="bg-rose-50 border border-rose-100 rounded-lg p-3 text-[10.5px] text-rose-800 animate-fadeIn font-mono leading-relaxed space-y-0.5">
+                    <div className="bg-rose-50 border border-rose-100 rounded-lg p-3 text-[10.5px] text-rose-800 animate-fadeIn font-mono leading-relaxed space-y-0.5 mt-2">
                       <div className="font-bold text-[9px] uppercase tracking-wider text-rose-900">Erro de Processamento</div>
                       <div><strong>Código:</strong> {job.errorCode || 'N/A'}</div>
                       <div><strong>Mensagem:</strong> {job.errorMessage || 'N/A'}</div>

@@ -438,6 +438,11 @@ app.get("/api/config", (req, res) => {
     googleDocsStatus,
     googleDriveStatus,
 
+    // Real secrets returned for secure viewing and copying by authorised operator
+    gdiGoogleClientSecret: credentialsConfig.gdiGoogleClientSecret || "",
+    gdiGoogleServiceAccountPrivateKey: credentialsConfig.gdiGoogleServiceAccountPrivateKey || "",
+    gdiPortalBossCallbackSecret: credentialsConfig.gdiPortalBossCallbackSecret || "",
+
     // Safely check if sensitive details are filled without returning them
     gdiIntegrationKey: credentialsConfig.gdiIntegrationKey,
     hasClientSecret: !!credentialsConfig.gdiGoogleClientSecret,
@@ -707,6 +712,19 @@ app.post("/api/jobs/clear", (req, res) => {
   jobsStore = [];
   saveJobs();
   res.json({ success: true });
+});
+
+// Delete a single job by ID
+app.delete("/api/jobs/:id", (req, res) => {
+  const jobId = req.params.id;
+  const initialLength = jobsStore.length;
+  jobsStore = jobsStore.filter(j => j.id !== jobId);
+  if (jobsStore.length !== initialLength) {
+    saveJobs();
+    res.json({ success: true });
+  } else {
+    res.status(404).json({ success: false, message: "Job not found" });
+  }
 });
 
 // Helper custom error for strict diagnostic categorization required by Portal BOSS
