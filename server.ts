@@ -85,7 +85,7 @@ const DEFAULT_CONFIG: CredentialsConfig = {
   gdiGoogleDriveScopes: "https://www.googleapis.com/auth/drive.file",
   gdiPortalBossWebhookUrl: "https://api.portalboss.com.br/gdi/webhook",
   gdiPortalBossCallbackSecret: "callback_sec_gdi_2026_prod",
-  gdiIntegrationKey: "gdi_key_portal_boss_connect_2026_secured",
+  gdiIntegrationKey: "",
 };
 
 // Default initial template cards fallback
@@ -115,10 +115,17 @@ let googleDriveStatus = "não_configurado";
 // Status initialization is defined below after reading tokens.json
 
 
+function getActiveIntegrationKey(): string {
+  return (process.env.GDI_INTEGRATION_KEY || credentialsConfig.gdiIntegrationKey || "").trim();
+}
+
 // Load files
 try {
   if (fs.existsSync(CONFIG_FILE)) {
     credentialsConfig = { ...DEFAULT_CONFIG, ...JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8")) };
+    if (process.env.GDI_INTEGRATION_KEY !== undefined) {
+      credentialsConfig.gdiIntegrationKey = process.env.GDI_INTEGRATION_KEY;
+    }
   } else {
     // Populate from process.env if available, otherwise file
     credentialsConfig = {
@@ -444,13 +451,13 @@ app.get("/api/config", (req, res) => {
     gdiPortalBossCallbackSecret: credentialsConfig.gdiPortalBossCallbackSecret || "",
 
     // Safely check if sensitive details are filled without returning them
-    gdiIntegrationKey: credentialsConfig.gdiIntegrationKey,
+    gdiIntegrationKey: getActiveIntegrationKey(),
     hasClientSecret: !!credentialsConfig.gdiGoogleClientSecret,
     hasServiceAccountPrivateKey: !!credentialsConfig.gdiGoogleServiceAccountPrivateKey,
     hasCallbackSecret: !!credentialsConfig.gdiPortalBossCallbackSecret,
-    hasIntegrationKey: !!credentialsConfig.gdiIntegrationKey,
-    maskIntegrationKey: credentialsConfig.gdiIntegrationKey 
-      ? credentialsConfig.gdiIntegrationKey.substring(0, 3) + "..." + credentialsConfig.gdiIntegrationKey.substring(credentialsConfig.gdiIntegrationKey.length - 3)
+    hasIntegrationKey: !!getActiveIntegrationKey(),
+    maskIntegrationKey: getActiveIntegrationKey() 
+      ? getActiveIntegrationKey().substring(0, 3) + "..." + getActiveIntegrationKey().substring(getActiveIntegrationKey().length - 3)
       : ""
   });
 });
@@ -1309,9 +1316,10 @@ function updateJobState(jobId: string, updates: Partial<Job>) {
 
 // GET /api/selftest -> Executa e retorna o autoteste completo de pré-requisitos síncronos
 app.get("/api/selftest", async (req, res) => {
+  const activeKey = getActiveIntegrationKey();
   const gdiKeyHeader = req.headers["x-boss-google-docs-integration-key"] || req.query["x-boss-google-docs-integration-key"] || req.query["key"];
-  if (!gdiKeyHeader || gdiKeyHeader !== credentialsConfig.gdiIntegrationKey) {
-    const expected = credentialsConfig.gdiIntegrationKey || "";
+  if (!activeKey || !gdiKeyHeader || gdiKeyHeader !== activeKey) {
+    const expected = activeKey || "";
     const mask = expected.length >= 6 
       ? expected.slice(0, 3) + "...[MASK]..." + expected.slice(-3)
       : "...";
@@ -1383,10 +1391,38 @@ app.get("/api/selftest", async (req, res) => {
   }
 
   // 4. integrationKeyConfigured
-  if (credentialsConfig.gdiIntegrationKey && credentialsConfig.gdiIntegrationKey.trim() !== "") {
+  if (activeKey) {
     results.integrationKeyConfigured = true;
   } else {
     results.integrationKeyConfiguredHint = "A chave de integração 'gdiIntegrationKey' está vazia ou não configurada.";
+  }
+
+  // 5. destinationFolder optional check (Tarefa 3)
+  const folderId = req.query.folderId;
+  if (folderId && results.serviceAccountTokenOk && token) {
+    try {
+      const folderRes = await fetch(`https://www.googleapis.com/drive/v3/files/${folderId}?fields=id,name,capabilities&supportsAllDrives=true`, {
+        headers: { "Authorization": `Bearer ${token}` }
+      });
+      if (folderRes.ok) {
+        const folderObj = await folderRes.json();
+        results.destinationFolderReadable = true;
+        results.destinationFolderName = folderObj.name || "";
+        results.destinationFolderWritable = !!(folderObj.capabilities?.canAddChildren);
+      } else {
+        const errJson = await folderRes.json().catch(() => ({}));
+        const errDetail = errJson.error?.message || folderRes.statusText;
+        results.destinationFolderReadable = false;
+        results.destinationFolderWritable = false;
+        results.destinationFolderHint = `Compartilhe a pasta de destino do cliente no Google Drive com o e-mail da Service Account '${credentialsConfig.gdiGoogleServiceAccountEmail || "não configurado"}' como Editor.`;
+        results.destinationFolderErrorDetail = errDetail;
+      }
+    } catch (err: any) {
+      results.destinationFolderReadable = false;
+      results.destinationFolderWritable = false;
+      results.destinationFolderHint = `Compartilhe a pasta de destino do cliente no Google Drive com o e-mail da Service Account '${credentialsConfig.gdiGoogleServiceAccountEmail || "não configurado"}' como Editor.`;
+      results.destinationFolderErrorDetail = err.message || String(err);
+    }
   }
 
   res.json(results);
@@ -1483,7 +1519,31 @@ app.post("/api/webhook/gdi-job", async (req, res) => {
   saveJobs();
 
   // Validate integrated securely with X-BOSS-Google-Docs-Integration-Key
-  if (!gdiKeyHeader || gdiKeyHeader !== credentialsConfig.gdiIntegrationKey) {
+  const activeKey = getActiveIntegrationKey();
+  if (!activeKey) {
+    const failedLogs = [
+      ...initialJob.logs,
+      { timestamp: nowStr, step: "GDI_SECURITY_FAILED", status: "failed", message: "A chave de integração GDI_INTEGRATION_KEY não está configurada no GDI." }
+    ];
+
+    updateJobState(jobId, {
+      status: "failed",
+      errorCode: "GDI_INTEGRATION_KEY_NOT_CONFIGURED",
+      errorMessage: "A chave de integração GDI_INTEGRATION_KEY não está configurada no GDI. Por favor, defina a variável de ambiente GDI_INTEGRATION_KEY no GDI.",
+      logs: failedLogs,
+      processedAt: new Date().toISOString()
+    });
+
+    return res.status(401).json({
+      success: false,
+      status: "failed",
+      errorCode: "GDI_INTEGRATION_KEY_NOT_CONFIGURED",
+      errorMessage: "A chave de integração GDI_INTEGRATION_KEY não está configurada no GDI. Por favor, defina a variável de ambiente GDI_INTEGRATION_KEY no GDI.",
+      logs: [{ timestamp: nowStr, step: "GDI_SECURITY_FAILED", status: "failed", message: "A chave de integração GDI_INTEGRATION_KEY não está configurada no GDI." }]
+    });
+  }
+
+  if (!gdiKeyHeader || gdiKeyHeader !== activeKey) {
     console.error("GDI security failure: Unauthorized connection header attempt.");
     
     const failedLogs = [
@@ -1499,7 +1559,7 @@ app.post("/api/webhook/gdi-job", async (req, res) => {
       processedAt: new Date().toISOString()
     });
 
-    const expected = credentialsConfig.gdiIntegrationKey || "";
+    const expected = activeKey || "";
     const mask = expected.length >= 6 
       ? expected.slice(0, 3) + "...[MASK]..." + expected.slice(-3)
       : "...";
@@ -1693,7 +1753,18 @@ app.post("/api/webhook/gdi-job/dry-run", async (req, res) => {
   const timestampIso = new Date().toISOString();
 
   // Validate security integration key
-  if (!gdiKeyHeader || gdiKeyHeader !== credentialsConfig.gdiIntegrationKey) {
+  const activeKey = getActiveIntegrationKey();
+  if (!activeKey) {
+    return res.status(401).json({
+      success: false,
+      status: "failed",
+      errorCode: "GDI_INTEGRATION_KEY_NOT_CONFIGURED",
+      errorMessage: "A chave de integração GDI_INTEGRATION_KEY não está configurada no GDI. Por favor, defina a variável de ambiente GDI_INTEGRATION_KEY no GDI.",
+      logs: [{ timestamp: nowStr, step: "GDI_SECURITY_FAILED", status: "failed", message: "A chave de integração GDI_INTEGRATION_KEY não está configurada no GDI." }]
+    });
+  }
+
+  if (!gdiKeyHeader || gdiKeyHeader !== activeKey) {
     console.error("GDI dry-run security failure: Unauthorized connection header attempt.");
     return res.status(401).json({
       success: false,
