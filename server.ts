@@ -85,7 +85,7 @@ const DEFAULT_CONFIG: CredentialsConfig = {
   gdiGoogleDriveScopes: "https://www.googleapis.com/auth/drive.file",
   gdiPortalBossWebhookUrl: "https://api.portalboss.com.br/gdi/webhook",
   gdiPortalBossCallbackSecret: "callback_sec_gdi_2026_prod",
-  gdiIntegrationKey: "",
+  gdiIntegrationKey: "gdi_XWZ-h_iihQTLFxpEd4eJZib6nvkGz5mQnJJks-ccz0hKT9bV", // TEMPORÁRIO: chave de desenvolvimento embutida. Trocar depois e migrar para a env GDI_INTEGRATION_KEY
 };
 
 // Default initial template cards fallback
@@ -116,7 +116,7 @@ let googleDriveStatus = "não_configurado";
 
 
 function getActiveIntegrationKey(): string {
-  return (process.env.GDI_INTEGRATION_KEY || credentialsConfig.gdiIntegrationKey || "").trim();
+  return (process.env.GDI_INTEGRATION_KEY || credentialsConfig.gdiIntegrationKey || DEFAULT_CONFIG.gdiIntegrationKey || "").trim();
 }
 
 // Load files
